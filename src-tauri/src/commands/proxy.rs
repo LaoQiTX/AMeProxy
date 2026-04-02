@@ -71,9 +71,9 @@ pub fn start_proxy(state: State<AppState>) -> Result<String, String> {
     
     // 查找存在的 mihomo.exe
     let mut found_path = None;
-    for (m_dir, e_path) in possible_paths {
+    for (m_dir, e_path) in &possible_paths {
         if e_path.exists() {
-            found_path = Some((m_dir, e_path));
+            found_path = Some((m_dir.clone(), e_path.clone()));
             break;
         }
     }
