@@ -389,20 +389,31 @@ export const useProxyStore = defineStore('proxy', {
         await invoke('add_proxy_provider', { name, url });
         console.log('add_proxy_provider调用成功');
         
-        // 如果代理已连接，重启代理以加载新配置
-        if (this.isConnected) {
+        // 确保代理已启动
+        if (!this.isConnected) {
+          console.log('代理未连接，启动代理...');
+          await invoke('start_proxy');
+          this.isConnected = true;
+          this.startPolling();
+          this.connectWebSocket();
+          this.connectLogWebSocket();
+          this.connectConnectionsWebSocket();
+          console.log('代理已启动');
+        } else {
           console.log('代理已连接，重启代理...');
           await invoke('stop_proxy');
           console.log('代理已停止');
           await invoke('start_proxy');
           console.log('代理已启动');
-          // 等待代理启动后获取订阅信息
-          setTimeout(() => {
-            console.log('等待2秒后获取订阅信息...');
-            this.fetchProviders();
-            this.fetchProxies();
-          }, 2000);
         }
+        
+        // 等待代理启动后获取订阅信息
+        setTimeout(() => {
+          console.log('等待3秒后获取订阅信息...');
+          this.fetchProviders();
+          this.fetchProxies();
+          this.fetchRules();
+        }, 3000);
         
         // 直接从API获取最新的订阅信息
         console.log('直接获取订阅信息...');
