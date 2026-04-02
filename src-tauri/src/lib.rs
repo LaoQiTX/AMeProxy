@@ -58,17 +58,49 @@ pub fn run() {
       if process.is_none() {
         // 获取当前目录
         let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-        // 构建Mihomo目录路径
-        let mut mihomo_dir = current_dir.clone();
-        mihomo_dir.push("configs");
-        mihomo_dir.push("mihomo");
         
-        // 构建Mihomo可执行文件路径
-        let mut exe_path = mihomo_dir.clone();
-        exe_path.push("mihomo.exe");
+        // 尝试不同的路径查找 mihomo.exe
+        let mut possible_paths = Vec::new();
         
-        // 检查可执行文件是否存在
-        if exe_path.exists() {
+        // 路径1: 当前目录下的 configs/mihomo
+        let mut mihomo_dir1 = current_dir.clone();
+        mihomo_dir1.push("configs");
+        mihomo_dir1.push("mihomo");
+        let mut exe_path1 = mihomo_dir1.clone();
+        exe_path1.push("mihomo.exe");
+        possible_paths.push((mihomo_dir1, exe_path1));
+        
+        // 路径2: 向上两级目录的 configs/mihomo (适用于打包后的环境)
+        let mut mihomo_dir2 = current_dir.clone();
+        mihomo_dir2.pop();
+        mihomo_dir2.pop();
+        mihomo_dir2.push("configs");
+        mihomo_dir2.push("mihomo");
+        let mut exe_path2 = mihomo_dir2.clone();
+        exe_path2.push("mihomo.exe");
+        possible_paths.push((mihomo_dir2, exe_path2));
+        
+        // 路径3: 向上三级目录的 configs/mihomo (适用于更深层次的打包环境)
+        let mut mihomo_dir3 = current_dir.clone();
+        mihomo_dir3.pop();
+        mihomo_dir3.pop();
+        mihomo_dir3.pop();
+        mihomo_dir3.push("configs");
+        mihomo_dir3.push("mihomo");
+        let mut exe_path3 = mihomo_dir3.clone();
+        exe_path3.push("mihomo.exe");
+        possible_paths.push((mihomo_dir3, exe_path3));
+        
+        // 查找存在的 mihomo.exe
+        let mut found_path = None;
+        for (m_dir, e_path) in possible_paths {
+            if e_path.exists() {
+                found_path = Some((m_dir, e_path));
+                break;
+            }
+        }
+        
+        if let Some((mihomo_dir, exe_path)) = found_path {
           // 创建启动命令
           let mut command = std::process::Command::new(exe_path);
           command.arg("-d").arg(mihomo_dir);
