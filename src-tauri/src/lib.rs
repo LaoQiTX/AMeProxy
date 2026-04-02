@@ -6,17 +6,13 @@ use tauri::{generate_handler, Manager};
 use tauri_plugin_log;
 use log;
 
-// Windows 平台特定导入
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 // 导入代理模块，包含代理进程管理和配置文件管理
 mod proxy;
 // 导入命令模块，包含所有 Tauri 命令
 mod commands;
 
-// 导入代理模块中的 AppState 和 generate_default_config 函数
-use proxy::{AppState, generate_default_config};
+// 导入代理模块中的 AppState 函数
+use proxy::AppState;
 // 导入 commands 模块中的所有命令
 use commands::*;
 
@@ -107,7 +103,10 @@ pub fn run() {
 
           // Windows平台特定设置：创建无窗口进程
           #[cfg(target_os = "windows")]
-          std::os::windows::process::CommandExt::creation_flags(&mut command, 0x08000000);
+          {{
+              use std::os::windows::process::CommandExt;
+              command.creation_flags(0x08000000);
+          }}
 
           // 启动进程
           match command.spawn() {
