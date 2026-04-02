@@ -126,7 +126,7 @@ pub fn run() {
       Ok(())
     })
     // 注册所有 Tauri 命令
-    .invoke_handler(generate_handler![start_proxy, stop_proxy, save_subscription, set_proxy_provider_url, add_proxy_provider, update_proxy_provider, remove_proxy_provider])
+    .invoke_handler(generate_handler![start_proxy, stop_proxy, is_proxy_running, save_subscription, set_proxy_provider_url, add_proxy_provider, update_proxy_provider, remove_proxy_provider])
     // 运行应用
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

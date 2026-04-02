@@ -127,3 +127,21 @@ pub fn stop_proxy(state: State<AppState>) -> Result<String, String> {
         Ok("Proxy is not running".into())
     }
 }
+
+/// 检查代理是否正在运行
+/// 
+/// 该函数负责检查Mihomo代理进程是否正在运行
+/// 
+/// # 参数
+/// * `state` - 应用状态，包含代理进程信息
+/// 
+/// # 返回
+/// * `Ok(bool)` - 代理是否正在运行
+#[command]
+pub fn is_proxy_running(state: State<AppState>) -> Result<bool, String> {
+    // 获取代理进程的互斥锁
+    let process = state.proxy_process.lock().map_err(|e| e.to_string())?;
+    
+    // 检查进程是否存在
+    Ok(process.is_some())
+}
