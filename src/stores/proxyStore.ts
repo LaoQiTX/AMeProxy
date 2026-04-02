@@ -57,6 +57,26 @@ export const useProxyStore = defineStore('proxy', {
     connWs: null as WebSocket | null
   }),
   actions: {
+    // 初始化应用
+    async initialize() {
+      try {
+        // 检查代理是否已经在运行
+        const isRunning = await invoke('is_proxy_running');
+        if (isRunning) {
+          this.isConnected = true;
+          this.startPolling();
+          this.connectWebSocket();
+          this.connectLogWebSocket();
+          this.connectConnectionsWebSocket();
+          this.fetchRules();
+          this.fetchProviders(); // 获取订阅信息
+          this.fetchProxies(); // 获取代理节点
+        }
+      } catch (err) {
+        console.error("Failed to initialize:", err);
+      }
+    },
+
     // 切换连接状态
     async toggleConnection() {
       try {
@@ -69,6 +89,7 @@ export const useProxyStore = defineStore('proxy', {
           this.connectConnectionsWebSocket();
           this.fetchRules();
           this.fetchProviders(); // 获取订阅信息
+          this.fetchProxies(); // 获取代理节点
         } else {
           await invoke('stop_proxy');
           this.isConnected = false;
