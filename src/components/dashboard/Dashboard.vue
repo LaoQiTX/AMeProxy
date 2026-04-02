@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { Shield, Activity, Cpu, RefreshCw, Wifi, Palette, ArrowUp, ArrowDown } from 'lucide-vue-next';
+import { Shield, Activity, Cpu, RefreshCw, Wifi, Palette, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from 'lucide-vue-next';
 import { useProxyStore } from '../../stores/proxyStore';
 import { useThemeStore } from '../../stores/themeStore';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 
 const proxyStore = useProxyStore();
 const themeStore = useThemeStore();
+
+const showNodeSelector = ref(false);
 
 const defaultGroup = computed(() => proxyStore.proxyGroups.find(g => g.name === '默认'));
 const currentProxy = computed(() => {
@@ -18,6 +20,15 @@ const currentDelay = computed(() => {
   if (currentProxy.value.delay === -1) return 'Timeout';
   return '- ms';
 });
+
+const selectNode = async (nodeName: string) => {
+  try {
+    await proxyStore.selectProxy('默认', nodeName);
+    showNodeSelector.value = false;
+  } catch (error) {
+    console.error('Failed to select node:', error);
+  }
+};
 
 </script>
 
@@ -68,13 +79,41 @@ const currentDelay = computed(() => {
             <div class="w-20 h-20 bg-gray-50 rounded-3xl flex items-center justify-center text-3xl font-bold text-gray-300">
               {{ (currentProxy.name || '未连接').substring(0, 2) }}
             </div>
-            <div>
-              <h4 class="text-2xl font-black text-gray-800">{{ currentProxy.name }}</h4>
-              <div class="flex items-center space-x-3 mt-2">
-                <span class="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[10px] font-bold rounded uppercase">{{ currentProxy.type }}</span>
-                <span class="flex items-center text-emerald-500 text-sm font-bold">
-                  <Wifi class="w-4 h-4 mr-1" /> {{ currentDelay }}
-                </span>
+            <div class="relative">
+              <div @click="showNodeSelector = !showNodeSelector" class="flex items-center justify-between cursor-pointer">
+                <div>
+                  <h4 class="text-2xl font-black text-gray-800">{{ currentProxy.name }}</h4>
+                  <div class="flex items-center space-x-3 mt-2">
+                    <span class="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[10px] font-bold rounded uppercase">{{ currentProxy.type }}</span>
+                    <span class="flex items-center text-emerald-500 text-sm font-bold">
+                      <Wifi class="w-4 h-4 mr-1" /> {{ currentDelay }}
+                    </span>
+                  </div>
+                </div>
+                <div class="ml-4">
+                  <ChevronDown v-if="!showNodeSelector" class="w-5 h-5 text-gray-400" />
+                  <ChevronUp v-else class="w-5 h-5 text-gray-400" />
+                </div>
+              </div>
+              <div v-if="showNodeSelector" class="absolute top-full left-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-100 z-10 max-h-80 overflow-y-auto">
+                <div class="p-2">
+                  <div 
+                    v-for="proxy in proxyStore.proxies" 
+                    :key="proxy.name"
+                    @click="selectNode(proxy.name)"
+                    class="px-4 py-2 rounded-lg hover:bg-gray-50 cursor-pointer flex items-center justify-between"
+                  >
+                    <div class="flex items-center space-x-2">
+                      <span class="w-6 h-6 bg-gray-100 rounded flex items-center justify-center text-xs font-bold">
+                        {{ proxy.region || '?' }}
+                      </span>
+                      <span class="text-sm font-medium">{{ proxy.name }}</span>
+                    </div>
+                    <span :class="['text-xs font-bold', proxy.delay === -1 ? 'text-gray-400' : proxy.delay < 100 ? 'text-emerald-500' : 'text-amber-500']">
+                      {{ proxy.delay === -1 ? '...' : proxy.delay + 'ms' }}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
