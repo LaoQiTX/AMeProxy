@@ -1,4 +1,4 @@
-![AMeProxyLOGO](https://github.com/LaoQiTX/AMeProxy/blob/main/icon.png?raw=true)
+<img src="./icon.png" alt="AMeProxy" width="128" />
 # AMeProxy - 雨代理 🌧️
 
 ## 项目目前仍在开发状态
