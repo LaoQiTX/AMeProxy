@@ -23,7 +23,7 @@ const currentDelay = computed(() => {
 
 const selectNode = async (nodeName: string) => {
   try {
-    await proxyStore.selectProxy('默认', nodeName);
+    await proxyStore.switchProxy('默认', nodeName);
     showNodeSelector.value = false;
   } catch (error) {
     console.error('Failed to select node:', error);

@@ -24,11 +24,18 @@ use std::env;
 #[command]
 pub fn save_subscription(content: String) -> Result<String, String> {
     // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
     // 构建配置文件路径
     let mut config_path = current_dir.clone();
-    config_path.push("configs");
-    config_path.push("mihomo");
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
     config_path.push("config.yaml");
 
     // 确保external-controller配置存在，以便我们可以控制代理
@@ -57,11 +64,18 @@ pub fn save_subscription(content: String) -> Result<String, String> {
 #[command]
 pub fn set_proxy_provider_url(provider: String, url: String) -> Result<String, String> {
     // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
     // 构建配置文件路径
     let mut config_path = current_dir.clone();
-    config_path.push("configs");
-    config_path.push("mihomo");
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
     config_path.push("config.yaml");
 
     // 读取配置文件内容
@@ -137,11 +151,18 @@ pub fn set_proxy_provider_url(provider: String, url: String) -> Result<String, S
 #[command]
 pub fn add_proxy_provider(name: String, url: String) -> Result<String, String> {
     // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
     // 构建配置文件路径
     let mut config_path = current_dir.clone();
-    config_path.push("configs");
-    config_path.push("mihomo");
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
     config_path.push("config.yaml");
 
     // 读取配置文件内容
@@ -207,11 +228,18 @@ pub fn add_proxy_provider(name: String, url: String) -> Result<String, String> {
 #[command]
 pub fn update_proxy_provider(old_name: String, new_name: String, url: String) -> Result<String, String> {
     // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
     // 构建配置文件路径
     let mut config_path = current_dir.clone();
-    config_path.push("configs");
-    config_path.push("mihomo");
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
     config_path.push("config.yaml");
 
     // 读取配置文件内容
@@ -285,11 +313,18 @@ pub fn update_proxy_provider(old_name: String, new_name: String, url: String) ->
 #[command]
 pub fn remove_proxy_provider(name: String) -> Result<String, String> {
     // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
     // 构建配置文件路径
     let mut config_path = current_dir.clone();
-    config_path.push("configs");
-    config_path.push("mihomo");
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
     config_path.push("config.yaml");
 
     // 读取配置文件内容
@@ -369,4 +404,94 @@ pub fn remove_proxy_provider(name: String) -> Result<String, String> {
     fs::write(&config_path, updated).map_err(|e| format!("Failed to write config: {}", e))?;
 
     Ok("Provider removed".into())
+}
+
+/// 获取配置文件内容
+/// 
+/// 该函数负责读取配置文件内容并返回解析后的对象
+/// 
+/// # 返回
+/// * `Ok(serde_json::Value)` - 配置文件内容
+/// * `Err(String)` - 读取失败的错误信息
+#[command]
+pub fn get_config() -> Result<serde_json::Value, String> {
+    // 获取当前目录
+    let mut current_dir = env::current_dir().map_err(|e| e.to_string())?;
+    
+    // 检查当前目录是否已经是 src-tauri
+    if current_dir.file_name().unwrap_or_default() == "src-tauri" {
+        // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+        current_dir = current_dir.parent().unwrap_or(&current_dir).to_path_buf();
+    }
+    
+    // 构建配置文件路径
+    let mut config_path = current_dir.clone();
+    config_path.push("src-tauri");
+    config_path.push("sidecar");
+    config_path.push("config.yaml");
+
+    // 读取配置文件内容
+    let content = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+
+    // 简单解析 YAML 文件，提取 proxy-providers 部分
+    let mut result = serde_json::Map::new();
+    let mut proxy_providers = serde_json::Map::new();
+    
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let mut in_proxy_providers = false;
+    let mut current_provider = String::new();
+    let mut current_provider_data = serde_json::Map::new();
+    let mut provider_indent = 0;
+    
+    for line in lines {
+        let trimmed = line.trim();
+        
+        if trimmed == "proxy-providers:" {
+            in_proxy_providers = true;
+            continue;
+        }
+        
+        if in_proxy_providers && !trimmed.is_empty() && !line.starts_with(' ') {
+            in_proxy_providers = false;
+            break;
+        }
+        
+        if in_proxy_providers {
+            // 跳过空行
+            if trimmed.is_empty() {
+                continue;
+            }
+            
+            let indent = line.chars().take_while(|c| *c == ' ').count();
+            
+            // 检查是否是新的提供者（以冒号结尾）
+            if trimmed.ends_with(':') {
+                // 新的提供者
+                if !current_provider.is_empty() {
+                    proxy_providers.insert(current_provider.clone(), serde_json::Value::Object(current_provider_data.clone()));
+                }
+                current_provider = trimmed.trim_end_matches(':').to_string();
+                current_provider_data = serde_json::Map::new();
+                provider_indent = indent;
+            } else if !current_provider.is_empty() && indent > provider_indent {
+                // 提供者的属性
+                let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let value = parts[1].trim().trim_matches('"');
+                    current_provider_data.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+                }
+            }
+        }
+    }
+    
+    // 添加最后一个提供者
+    if !current_provider.is_empty() {
+        proxy_providers.insert(current_provider, serde_json::Value::Object(current_provider_data));
+    }
+    
+    result.insert("proxy-providers".to_string(), serde_json::Value::Object(proxy_providers));
+
+    Ok(serde_json::Value::Object(result))
 }

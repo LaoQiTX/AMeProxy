@@ -6,6 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
 # 配置文件
 configs/**
 src-tauri/configs/**
@@ -13,3 +14,9 @@ src-tauri/configs/**
 # 构建产物
 dist/
 src-tauri/target/**
+
+# Sidecar 二进制文件（mihomo 内核）
+src-tauri/sidecar/
+
+# 文档
+docs/

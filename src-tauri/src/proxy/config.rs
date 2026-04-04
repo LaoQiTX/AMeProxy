@@ -9,250 +9,157 @@
 
 use std::env;
 use std::fs;
+use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
 
-/// 生成默认配置文件
-/// 
-/// 该函数负责：
-/// 1. 确保配置目录存在
-/// 2. 检查配置文件是否存在，如果不存在则生成默认配置
-/// 3. 同时为src-tauri目录生成配置文件
-/// 
-/// # 返回
-/// * `Ok(())` - 生成成功
-/// * `Err(String)` - 生成失败的错误信息
-pub fn generate_default_config() -> Result<(), String> {
-    // 获取当前目录
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
-    
-    // 确保配置目录存在
-    let mut config_dir = current_dir.clone();
-    config_dir.push("configs");
-    config_dir.push("mihomo");
-    
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config directory: {}", e))?;
+/// 配置类型
+#[derive(Debug, Clone, Copy)]
+pub enum ConfigType {
+    /// 运行时配置
+    Run,
+    /// 草稿配置
+    Draft,
+}
+
+/// Tun配置
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct TunConfig {
+    pub enable: Option<bool>,
+    pub stack: Option<String>,
+    pub dns_hijack: Option<Vec<String>>,
+    pub auto_route: Option<bool>,
+    pub auto_redirect: Option<bool>,
+    pub auto_detect_interface: Option<bool>,
+}
+
+/// DNS配置
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct DnsConfig {
+    pub enable: Option<bool>,
+    pub ipv6: Option<bool>,
+    pub enhanced_mode: Option<String>,
+    pub fake_ip_range: Option<String>,
+    pub listen: Option<String>,
+    pub nameserver: Option<Vec<String>>,
+    pub fallback: Option<Vec<String>>,
+}
+
+/// 实验性功能配置
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ExperimentalConfig {
+    pub ignore_resolve_fail: Option<bool>,
+}
+
+/// Clash配置结构体
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ClashConfig {
+    pub port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub redir_port: Option<u16>,
+    pub tproxy_port: Option<u16>,
+    pub mixed_port: Option<u16>,
+    pub allow_lan: Option<bool>,
+    pub mode: Option<String>,
+    pub log_level: Option<String>,
+    pub external_controller: Option<String>,
+    pub secret: Option<String>,
+    pub tun: Option<TunConfig>,
+    pub dns: Option<DnsConfig>,
+    pub experimental: Option<ExperimentalConfig>,
+}
+
+impl ClashConfig {
+    /// 获取默认配置
+    pub fn default() -> Self {
+        Self {
+            mixed_port: Some(7890),
+            allow_lan: Some(true),
+            mode: Some("rule".to_string()),
+            log_level: Some("info".to_string()),
+            external_controller: Some("127.0.0.1:9090".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// 获取配置
+    pub async fn get(_config_type: ConfigType) -> Result<Self, anyhow::Error> {
+        // 目前返回默认配置
+        Ok(Self::default())
     }
     
-    // 检查配置文件是否存在
-    let mut config_path = config_dir.clone();
-    config_path.push("config.yaml");
-    
-    if !config_path.exists() {
-        // 生成默认配置内容
-        let default_config = r#"# url 里填写自己的订阅,名称不能重复
+    /// 生成配置文件
+    /// 
+    /// 配置文件应该和内核在同一目录下：src-tauri/sidecar/
+    pub async fn generate_file() -> Result<PathBuf, anyhow::Error> {
+        // 获取项目根目录
+        let mut project_root = match env::current_dir() {
+            Ok(path) => path,
+            Err(e) => {
+                println!("获取当前目录失败: {}", e);
+                return Err(anyhow::anyhow!("Failed to get current directory: {}", e));
+            }
+        };
+        
+        // 检查当前目录是否已经是 src-tauri
+        if project_root.file_name().unwrap_or_default() == "src-tauri" {
+            // 如果是 src-tauri 目录，直接使用 sidecar 子目录
+            project_root = project_root.parent().unwrap_or(&project_root).to_path_buf();
+        }
+        
+        let sidecar_dir = project_root
+            .join("src-tauri")
+            .join("sidecar");
+        
+        // 打印路径信息，便于调试
+        println!("Project root: {:?}", project_root);
+        println!("Sidecar directory: {:?}", sidecar_dir);
+        
+        // 确保目录存在
+        match fs::create_dir_all(&sidecar_dir) {
+            Ok(_) => println!("Sidecar directory created or already exists"),
+            Err(e) => {
+                println!("创建目录失败: {}", e);
+                return Err(anyhow::anyhow!("Failed to create sidecar directory: {}", e));
+            }
+        }
+        
+        let file_path = sidecar_dir.join("config.yaml");
+        println!("Config file path: {:?}", file_path);
+        
+        // 如果配置文件不存在，生成默认配置
+        if !file_path.exists() {
+            println!("Config file not found, generating default...");
+            let default_config = r#"mixed-port: 7890
+allow-lan: true
+external-controller: 127.0.0.1:9090
+
 proxy-providers:
-  provider1:
-    url: ""
-    type: http
-    interval: 86400
-    health-check: {enable: true,url: "https://www.gstatic.com/generate_204", interval: 300}
-    override:
-      additional-prefix: "[provider1]"
 
-  provider2:
-    url: ""
-    type: http
-    interval: 86400
-    health-check: {enable: true,url: "https://www.gstatic.com/generate_204",interval: 300}
-    override:
-      additional-prefix: "[provider2]"
-
-proxies: 
+proxies:
   - name: "直连"
     type: direct
     udp: true
 
-mixed-port: 7890
-ipv6: true
-allow-lan: true
-unified-delay: false
-tcp-concurrent: true
-external-controller: 127.0.0.1:9090
-external-ui: ui
-external-ui-url: "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
-
-geodata-mode: false
-geox-url:
-  geoip: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip-lite.dat"
-  geosite: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-  mmdb: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country-lite.mmdb"
-  asn: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb"
-
-find-process-mode: strict
-global-client-fingerprint: chrome
-
-profile:
-  store-selected: true
-  store-fake-ip: true
-
-sniffer:
-  enable: true
-  sniff:
-    HTTP:
-      ports: [80, 8080-8880]
-      override-destination: true
-    TLS:
-      ports: [443, 8443]
-    QUIC:
-      ports: [443, 8443]
-  skip-domain:
-    - "Mijia Cloud"
-    - "+.push.apple.com"
-
-tun:
-  enable: true
-  stack: mixed
-  dns-hijack:
-    - "any:53"
-    - "tcp://any:53"
-  auto-route: true
-  auto-redirect: true
-  auto-detect-interface: true
-
-dns:
-  enable: true
-  ipv6: true
-  enhanced-mode: fake-ip
-  fake-ip-filter:
-    - "*"
-    - "+.lan"
-    - "+.local"
-    - "+.market.xiaomi.com"
-  default-nameserver:
-    - tls://223.5.5.5
-    - tls://223.6.6.6
-  nameserver:
-    - https://doh.pub/dns-query
-    - https://dns.alidns.com/dns-query
-
 proxy-groups:
-
   - name: 默认
     type: select
-    proxies: [自动选择,直连,香港,台湾,日本,新加坡,美国,其它地区,全部节点]
-
-  - name: Google
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: Telegram
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: Twitter
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: 哔哩哔哩
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: 巴哈姆特
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: YouTube
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: NETFLIX
-    type: select
-    proxies: [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: Spotify
-    type: select
-    proxies:  [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: Github
-    type: select
-    proxies:  [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  - name: 国内
-    type: select
-    proxies:  [直连,默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择]
-
-  - name: 其他
-    type: select
-    proxies:  [默认,香港,台湾,日本,新加坡,美国,其它地区,全部节点,自动选择,直连]
-
-  #分隔,下面是地区分组
-  - name: 香港
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)港|hk|hongkong|hong kong"
-
-  - name: 台湾
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)台|tw|taiwan"
-
-  - name: 日本
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)日|jp|japan"
-
-  - name: 美国
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)美|us|unitedstates|united states"
-
-  - name: 新加坡
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)(新|sg|singapore)"
-
-  - name: 其它地区
-    type: select
-    include-all: true
-    exclude-type: direct
-    filter: "(?i)^(?!.*(?:🇭🇰|🇯🇵|🇺🇸|🇸🇬|🇨🇳|港|hk|hongkong|台|tw|taiwan|日|jp|japan|新|sg|singapore|美|us|unitedstates)).*"
-
-  - name: 全部节点
-    type: select
-    include-all: true
-    exclude-type: direct
-
-  - name: 自动选择
-    type: url-test
-    include-all: true
-    exclude-type: direct
-    tolerance: 10
+    proxies: [直连]
 
 rules:
   - MATCH,默认
 "#;
+            
+            match fs::write(&file_path, default_config) {
+                Ok(_) => println!("Default config generated successfully: {:?}", file_path),
+                Err(e) => {
+                    println!("写入配置文件失败: {}", e);
+                    return Err(anyhow::anyhow!("Failed to write config file: {}", e));
+                }
+            }
+        } else {
+            println!("Config file already exists: {:?}", file_path);
+        }
         
-        // 写入默认配置文件
-        fs::write(&config_path, default_config).map_err(|e| format!("Failed to write default config: {}", e))?;
-        println!("Generated default config file at: {:?}", config_path);
+        Ok(file_path)
     }
-    
-    // 同样为src-tauri目录生成配置文件
-    let mut tauri_config_dir = current_dir.clone();
-    tauri_config_dir.push("src-tauri");
-    tauri_config_dir.push("configs");
-    tauri_config_dir.push("mihomo");
-    
-    if !tauri_config_dir.exists() {
-        fs::create_dir_all(&tauri_config_dir).map_err(|e| format!("Failed to create tauri config directory: {}", e))?;
-    }
-    
-    let mut tauri_config_path = tauri_config_dir.clone();
-    tauri_config_path.push("config.yaml");
-    
-    if !tauri_config_path.exists() {
-        // 复制配置文件到src-tauri目录
-        let config_content = fs::read_to_string(&config_path).map_err(|e| format!("Failed to read config file: {}", e))?;
-        fs::write(&tauri_config_path, config_content).map_err(|e| format!("Failed to write tauri config file: {}", e))?;
-        println!("Copied config file to src-tauri directory: {:?}", tauri_config_path);
-    }
-    
-    Ok(())
 }
-
-
