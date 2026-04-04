@@ -1,4 +1,8 @@
-<img src="./icon.png" alt="AMeProxy" width="128" />
+
+<h1 align="center">
+  <img src="./icon.png" alt="AMeProxy" width="128" />
+</h1>
+
 # AMeProxy - 雨代理 🌧️
 
 ## 项目目前仍在开发状态
