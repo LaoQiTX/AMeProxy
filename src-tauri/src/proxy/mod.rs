@@ -11,4 +11,3 @@ mod config;
 
 // 导出子模块中的所有内容
 pub use process::*;
-pub use config::*;

@@ -5,7 +5,7 @@
   "identifier": "com.AMeProxy.dev",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:3001",
+    "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "AMeProxy",
-        "width": 1200,
-        "height": 600,
+        "width": 1140,
+        "height": 630,
         "resizable": true,
         "fullscreen": false
       }
@@ -32,6 +32,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "sidecar/my-mihomo"
     ]
   }
 }
