@@ -1,24 +1,29 @@
 import { defineStore } from 'pinia';
 import type { Connection, Rule, Log, ProxyGroup, Subscription, Proxy, TrafficData } from '../types';
 
-// 条件导入invoke函数
-let invoke: any;
-try {
-  // 动态导入Tauri API
-  import('@tauri-apps/api/core').then(({ invoke: tauriInvoke }) => {
-    invoke = tauriInvoke;
-  });
-} catch (error) {
-  console.warn('Tauri环境未初始化，使用模拟invoke函数');
-}
+// 动态获取invoke函数
+const getInvoke = async () => {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    // 确保invoke是一个函数
+    if (typeof invoke === 'function') {
+      return invoke;
+    } else {
+      console.warn('Invoke is not a function, using mock');
+      return async (command: string, args?: any) => {
+        console.log(`模拟调用Tauri命令: ${command}`, args);
+        return Promise.resolve({});
+      };
+    }
+  } catch (e) {
+    console.warn('Tauri API not available, using mock');
+    return async (command: string, args?: any) => {
+      console.log(`模拟调用Tauri命令: ${command}`, args);
+      return Promise.resolve({});
+    };
+  }
+};
 
-// 确保invoke始终有值
-if (!invoke) {
-  invoke = async (command: string, args: any) => {
-    console.log(`模拟调用Tauri命令: ${command}`, args);
-    return Promise.resolve('模拟成功');
-  };
-}
 export const useProxyStore = defineStore('proxy', {
   state: () => ({
     // 当前标签页
@@ -60,18 +65,31 @@ export const useProxyStore = defineStore('proxy', {
     // 初始化应用
     async initialize() {
       try {
-        // 检查代理是否已经在运行
-        const isRunning = await invoke('is_proxy_running');
-        if (isRunning) {
-          this.isConnected = true;
-          this.startPolling();
-          this.connectWebSocket();
-          this.connectLogWebSocket();
-          this.connectConnectionsWebSocket();
-          this.fetchRules();
-          this.fetchProviders(); // 获取订阅信息
-          this.fetchProxies(); // 获取代理节点
-        }
+        console.log('Starting initialize...');
+        // 暂时注释掉初始化逻辑，避免错误
+        // const invoke = await getInvoke();
+        // console.log('Got invoke function:', typeof invoke);
+        // 
+        // // 检查代理是否已经在运行
+        // if (typeof invoke === 'function') {
+        //   console.log('Calling is_proxy_running...');
+        //   const isRunning = await invoke('is_proxy_running');
+        //   console.log('is_proxy_running result:', isRunning);
+        //   
+        //   if (isRunning) {
+        //     // 不自动连接到代理，只获取基本信息
+        //     // this.isConnected = true;
+        //     // this.startPolling();
+        //     // this.connectWebSocket();
+        //     // this.connectLogWebSocket();
+        //     // this.connectConnectionsWebSocket();
+        //     // this.fetchRules();
+        //     // this.fetchProviders(); // 获取订阅信息
+        //     // this.fetchProxies(); // 获取代理节点
+        //   }
+        // } else {
+        //   console.error('Invoke function is not a function:', invoke);
+        // }
       } catch (err) {
         console.error("Failed to initialize:", err);
       }
@@ -80,6 +98,7 @@ export const useProxyStore = defineStore('proxy', {
     // 切换连接状态
     async toggleConnection() {
       try {
+        const invoke = await getInvoke();
         if (!this.isConnected) {
           await invoke('start_proxy');
           this.isConnected = true;
@@ -111,76 +130,172 @@ export const useProxyStore = defineStore('proxy', {
     async fetchProviders() {
       try {
         console.log('开始获取订阅信息...');
-        const res = await fetch('http://127.0.0.1:9090/providers/proxies');
-        console.log('订阅信息请求状态:', res.status);
-        if (res.ok) {
-          const data = await res.json();
-          console.log('获取到的订阅信息:', data);
+        
+        // 先尝试从 config.yaml 文件中读取订阅信息
+        try {
+          const invoke = await getInvoke();
+          const configData = await invoke('get_config');
+          console.log('从 config.yaml 获取的订阅信息:', configData);
           
           // 清空现有订阅
           this.subscriptions = [];
           
-          // 处理每个订阅
-          if (data.providers) {
-            for (const name in data.providers) {
-              const provider = data.providers[name];
-              console.log('处理订阅:', name, provider);
-              const subscription: Subscription = {
-                name: name,
-                url: provider.proxyProvider?.url || provider.url || '',
-                count: provider.proxies?.length || 0,
-                updateTime: new Date().toLocaleString().slice(0, 16)
-              };
-              this.subscriptions.push(subscription);
+          // 处理 config.yaml 中的订阅
+          if (configData['proxy-providers'] && typeof configData['proxy-providers'] === 'object') {
+            for (const name in configData['proxy-providers']) {
+              const provider = configData['proxy-providers'][name];
+              console.log('处理 config.yaml 中的订阅:', name, provider);
+              
+              // 跳过 'override'，它不是订阅，而是订阅的属性
+              if (name === 'override') {
+                continue;
+              }
+              
+              // 只有当 provider 有 url 属性时，才认为它是一个订阅
+              if (provider.url) {
+                const subscription: Subscription = {
+                  name: name,
+                  url: provider.url || '',
+                  count: 0, // 从 config.yaml 中无法获取节点数量，需要从 API 获取
+                  updateTime: new Date().toLocaleString().slice(0, 16)
+                };
+                this.subscriptions.push(subscription);
+              }
             }
-          } else {
-            console.log('没有获取到订阅信息');
           }
-          console.log('最终订阅列表:', this.subscriptions);
-        } else {
-          console.error('获取订阅信息失败:', res.statusText);
+          
+          console.log('从 config.yaml 获取的订阅列表:', this.subscriptions);
+        } catch (configErr) {
+          console.error("Failed to get config from file:", configErr);
         }
+        
+        // 然后尝试从 API 获取订阅信息，更新节点数量
+        try {
+          const invoke = await getInvoke();
+          const data = await invoke('get_providers');
+          console.log('从 API 获取到的订阅信息:', data);
+          
+          // 处理每个订阅，更新节点数量
+          if ((data as any).providers) {
+            const providersData = (data as any).providers;
+            for (const name in providersData) {
+              // 跳过 'override'，它不是订阅，而是订阅的属性
+              if (name === 'override') {
+                continue;
+              }
+              
+              const provider = providersData[name];
+              console.log('处理 API 订阅:', name, provider);
+              
+              // 查找现有的订阅
+              const existingSubscription = this.subscriptions.find(s => s.name === name);
+              if (existingSubscription) {
+                // 更新节点数量
+                existingSubscription.count = provider.proxies?.length || 0;
+              } else if (provider.vehicleType === 'HTTP') {
+                // 添加新的订阅
+                const subscription: Subscription = {
+                  name: name,
+                  url: provider.proxyProvider?.url || provider.url || '',
+                  count: provider.proxies?.length || 0,
+                  updateTime: new Date().toLocaleString().slice(0, 16)
+                };
+                this.subscriptions.push(subscription);
+              }
+            }
+          } else if (data && typeof data === 'object') {
+            // 直接处理数据，可能是 API 响应格式变化
+            for (const name in data) {
+              // 跳过 'override'，它不是订阅，而是订阅的属性
+              if (name === 'override') {
+                continue;
+              }
+              
+              const provider = (data as any)[name];
+              console.log('处理 API 订阅（直接）:', name, provider);
+              
+              // 查找现有的订阅
+              const existingSubscription = this.subscriptions.find(s => s.name === name);
+              if (existingSubscription) {
+                // 更新节点数量
+                existingSubscription.count = provider.proxies?.length || 0;
+              } else if (provider.vehicleType === 'HTTP') {
+                // 添加新的订阅
+                const subscription: Subscription = {
+                  name: name,
+                  url: provider.proxyProvider?.url || provider.url || '',
+                  count: provider.proxies?.length || 0,
+                  updateTime: new Date().toLocaleString().slice(0, 16)
+                };
+                this.subscriptions.push(subscription);
+              }
+            }
+          }
+        } catch (apiErr) {
+          console.error("Failed to fetch providers from API:", apiErr);
+          // API 调用失败，保留从 config.yaml 获取的订阅信息
+        }
+        
+        console.log('最终订阅列表:', this.subscriptions);
       } catch (err) {
         console.error("Failed to fetch providers:", err);
+        // 保留空订阅列表
+        this.subscriptions = [];
+        console.log('最终订阅列表（空）:', this.subscriptions);
       }
     },
     async fetchRules() {
       try {
-        const res = await fetch('http://127.0.0.1:9090/rules');
-        if (res.ok) {
-          const data = await res.json();
-          this.rules = (data.rules || []).map((r: any) => ({
-            type: r.type,
-            payload: r.payload,
-            strategy: r.proxy
-          }));
-        }
-      } catch (err) {}
+        const invoke = await getInvoke();
+        const data = await invoke('get_rules');
+        console.log('Fetch rules data:', data);
+        this.rules = ((data as any).rules || []).map((r: any) => ({
+          type: r.type || 'Unknown',
+          payload: r.payload || '',
+          strategy: r.proxy || ''
+        }));
+        console.log('Updated rules:', this.rules);
+      } catch (err) {
+        console.error("Failed to fetch rules:", err);
+        // 错误时清空数据
+        this.rules = [];
+      }
     },
     connectConnectionsWebSocket() {
       if (this.connWs) return;
-      this.connWs = new WebSocket('ws://127.0.0.1:9090/connections');
-      this.connWs.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.connections = (data.connections || []).map((c: any) => ({
-            id: c.id,
-            host: c.metadata.host || c.metadata.destinationIP,
-            ip: c.metadata.destinationIP,
-            process: c.metadata.processPath ? c.metadata.processPath.split('\\').pop().split('/').pop() : '',
-            rule: c.rule,
-            group: c.chains ? c.chains[0] : '',
-            speed: this.formatBytes(c.downloadSpeed || 0) + '/s',
-            time: new Date(c.start).toLocaleTimeString()
-          }));
-        } catch (e) {}
-      };
-      this.connWs.onclose = () => {
+      try {
+        this.connWs = new WebSocket('ws://127.0.0.1:9090/connections');
+        this.connWs.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.connections = (data.connections || []).map((c: any) => ({
+              id: c.id,
+              host: c.metadata.host || c.metadata.destinationIP,
+              ip: c.metadata.destinationIP,
+              process: c.metadata.processPath ? c.metadata.processPath.split('\\').pop().split('/').pop() : '',
+              rule: c.rule,
+              group: c.chains ? c.chains[0] : '',
+              speed: this.formatBytes(c.downloadSpeed || 0) + '/s',
+              time: new Date(c.start).toLocaleTimeString()
+            }));
+          } catch (e) {
+            console.error("WebSocket message error:", e);
+          }
+        };
+        this.connWs.onclose = () => {
+          this.connWs = null;
+          if (this.isConnected) {
+            setTimeout(() => this.connectConnectionsWebSocket(), 3000);
+          }
+        };
+        this.connWs.onerror = (error) => {
+          console.warn("Connections WebSocket error:", error);
+          this.connWs = null;
+        };
+      } catch (error) {
+        console.warn("Failed to connect to connections WebSocket:", error);
         this.connWs = null;
-        if (this.isConnected) {
-          setTimeout(() => this.connectConnectionsWebSocket(), 3000);
-        }
-      };
+      }
     },
     disconnectConnectionsWebSocket() {
       if (this.connWs) {
@@ -190,26 +305,37 @@ export const useProxyStore = defineStore('proxy', {
     },
     connectLogWebSocket() {
       if (this.logWs) return;
-      this.logWs = new WebSocket('ws://127.0.0.1:9090/logs?level=info');
-      this.logWs.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.logs.unshift({
-            time: new Date().toLocaleTimeString(),
-            level: data.type,
-            msg: data.payload
-          });
-          if (this.logs.length > 200) {
-            this.logs.pop();
+      try {
+        this.logWs = new WebSocket('ws://127.0.0.1:9090/logs?level=info');
+        this.logWs.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.logs.unshift({
+              time: new Date().toLocaleTimeString(),
+              level: data.type,
+              msg: data.payload
+            });
+            if (this.logs.length > 200) {
+              this.logs.pop();
+            }
+          } catch (e) {
+            console.error("WebSocket message error:", e);
           }
-        } catch (e) {}
-      };
-      this.logWs.onclose = () => {
+        };
+        this.logWs.onclose = () => {
+          this.logWs = null;
+          if (this.isConnected) {
+            setTimeout(() => this.connectLogWebSocket(), 3000);
+          }
+        };
+        this.logWs.onerror = (error) => {
+          console.warn("Log WebSocket error:", error);
+          this.logWs = null;
+        };
+      } catch (error) {
+        console.warn("Failed to connect to log WebSocket:", error);
         this.logWs = null;
-        if (this.isConnected) {
-          setTimeout(() => this.connectLogWebSocket(), 3000);
-        }
-      };
+      }
     },
     disconnectLogWebSocket() {
       if (this.logWs) {
@@ -219,22 +345,33 @@ export const useProxyStore = defineStore('proxy', {
     },
     connectWebSocket() {
       if (this.ws) return;
-      this.ws = new WebSocket('ws://127.0.0.1:9090/traffic');
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.trafficData = {
-            up: this.formatBytes(data.up) + '/s',
-            down: this.formatBytes(data.down) + '/s'
-          };
-        } catch (e) {}
-      };
-      this.ws.onclose = () => {
+      try {
+        this.ws = new WebSocket('ws://127.0.0.1:9090/traffic');
+        this.ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.trafficData = {
+              up: this.formatBytes(data.up) + '/s',
+              down: this.formatBytes(data.down) + '/s'
+            };
+          } catch (e) {
+            console.error("WebSocket message error:", e);
+          }
+        };
+        this.ws.onclose = () => {
+          this.ws = null;
+          if (this.isConnected) {
+            setTimeout(() => this.connectWebSocket(), 3000);
+          }
+        };
+        this.ws.onerror = (error) => {
+          console.warn("Traffic WebSocket error:", error);
+          this.ws = null;
+        };
+      } catch (error) {
+        console.warn("Failed to connect to traffic WebSocket:", error);
         this.ws = null;
-        if (this.isConnected) {
-          setTimeout(() => this.connectWebSocket(), 3000);
-        }
-      };
+      }
     },
     disconnectWebSocket() {
       if (this.ws) {
@@ -263,81 +400,76 @@ export const useProxyStore = defineStore('proxy', {
     },
     async fetchProxies() {
       try {
-        const res = await fetch('http://127.0.0.1:9090/proxies');
-        if (res.ok) {
-          const data = await res.json();
-          // 更新代理组和节点
-          const groups: ProxyGroup[] = [];
-          const nodes: Proxy[] = [];
-          
-          for (const key in data.proxies) {
-            const p = data.proxies[key];
-            if (p.all && p.all.length > 0) {
-              groups.push({
-                name: p.name,
-                type: p.type,
-                options: p.all,
-                selected: p.now || ''
-              });
-            } else if (p.type !== 'Selector' && p.type !== 'URLTest' && p.type !== 'Fallback' && p.type !== 'LoadBalance' && p.type !== 'Direct' && p.type !== 'Reject') {
-              nodes.push({
-                name: p.name,
-                type: p.type,
-                delay: p.history && p.history.length > 0 ? p.history[p.history.length - 1].delay : 0,
-                region: p.name.substring(0, 2)
-              });
+        const invoke = await getInvoke();
+        const data = await invoke('get_proxies');
+        console.log('Fetch proxies data:', data);
+        // 更新代理组和节点
+        const groups: ProxyGroup[] = [];
+        const nodes: Proxy[] = [];
+        
+        // 检查数据格式
+        if (data && typeof data === 'object') {
+          const proxiesData = (data as any).proxies;
+          if (proxiesData && typeof proxiesData === 'object') {
+            for (const key in proxiesData) {
+              const p = proxiesData[key];
+              if (p && typeof p === 'object') {
+                if (p.all && Array.isArray(p.all) && p.all.length > 0) {
+                  groups.push({
+                    name: p.name || key,
+                    type: p.type || 'Unknown',
+                    options: p.all,
+                    selected: p.now || ''
+                  });
+                } else if (p.type && p.type !== 'Selector' && p.type !== 'URLTest' && p.type !== 'Fallback' && p.type !== 'LoadBalance' && p.type !== 'Direct' && p.type !== 'Reject') {
+                  nodes.push({
+                    name: p.name || key,
+                    type: p.type,
+                    delay: p.history && Array.isArray(p.history) && p.history.length > 0 ? p.history[p.history.length - 1].delay : 0,
+                    region: p.name ? p.name.substring(0, 2) : ''
+                  });
+                }
+              }
             }
           }
-          this.proxyGroups = groups;
-          this.proxies = nodes;
         }
+        
+        this.proxyGroups = groups;
+        this.proxies = nodes;
+        console.log('Updated proxy groups:', groups);
+        console.log('Updated proxies:', nodes);
       } catch (err) {
-        // console.error("Fetch proxies error:", err);
+        console.error("Fetch proxies error:", err);
+        // 错误时清空数据，避免显示旧数据
+        this.proxyGroups = [];
+        this.proxies = [];
       }
     },
     async switchProxy(groupName: string, proxyName: string) {
       try {
-        const res = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(groupName)}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ name: proxyName })
-        });
-        if (res.ok) {
-          // fetchProxies(); // will be updated by polling
-          const group = this.proxyGroups.find(g => g.name === groupName);
-          if (group) {
-            group.selected = proxyName;
-          }
+        const invoke = await getInvoke();
+        await invoke('change_proxy', { group: groupName, proxy: proxyName });
+        // fetchProxies(); // will be updated by polling
+        const group = this.proxyGroups.find(g => g.name === groupName);
+        if (group) {
+          group.selected = proxyName;
         }
       } catch (err) {
         console.error("Failed to switch proxy:", err);
       }
     },
-    // 模拟流量数据 - 暂时保留
-    simulateTraffic() {
-      if (!this.isConnected) return;
-      this.trafficData = {
-        up: (Math.random() * 100).toFixed(1) + ' KB/s',
-        down: (Math.random() * 500).toFixed(1) + ' KB/s'
-      };
-      setTimeout(() => this.simulateTraffic(), 2000);
-    },
+
     // 测试延迟
     async testLatency() {
       this.isTesting = true;
       try {
+        const invoke = await getInvoke();
         const promises = this.proxies.map(async (p) => {
           try {
-            const res = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(p.name)}/delay?timeout=5000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204`);
-            if (res.ok) {
-              const data = await res.json();
-              p.delay = data.delay;
-            } else {
-              p.delay = -1;
-            }
-          } catch {
+            const delay = await invoke('test_proxy', { proxy: p.name });
+            p.delay = delay;
+          } catch (err) {
+            console.error("Test proxy error:", err);
             p.delay = -1;
           }
         });
@@ -352,6 +484,7 @@ export const useProxyStore = defineStore('proxy', {
     async addSubscription(name: string, url: string) {
       if (!url || !name) return;
       try {
+        const invoke = await getInvoke();
         await invoke('add_proxy_provider', { name, url });
         
         const existing = this.subscriptions.find(s => s.name === name);
@@ -380,6 +513,7 @@ export const useProxyStore = defineStore('proxy', {
     async updateSubscription(oldName: string, newName: string, url: string) {
       if (!url || !newName) return;
       try {
+        const invoke = await getInvoke();
         await invoke('update_proxy_provider', { oldName, newName, url });
         
         const existing = this.subscriptions.find(s => s.name === oldName);
@@ -404,6 +538,7 @@ export const useProxyStore = defineStore('proxy', {
       if (!url || !name) return;
       try {
         console.log('开始导入订阅:', name, url);
+        const invoke = await getInvoke();
         
         // 首先添加订阅到配置文件
         console.log('调用add_proxy_provider...');
@@ -428,19 +563,12 @@ export const useProxyStore = defineStore('proxy', {
           console.log('代理已启动');
         }
         
-        // 等待代理启动后获取订阅信息
-        setTimeout(() => {
-          console.log('等待3秒后获取订阅信息...');
-          this.fetchProviders();
-          this.fetchProxies();
-          this.fetchRules();
-        }, 3000);
-        
-        // 直接从API获取最新的订阅信息
-        console.log('直接获取订阅信息...');
+        // 获取订阅信息
+        console.log('获取订阅信息...');
         await this.fetchProviders();
         console.log('获取订阅信息完成');
         
+        // 获取节点信息
         console.log('获取节点信息...');
         await this.fetchProxies();
         console.log('获取节点信息完成');
@@ -448,16 +576,24 @@ export const useProxyStore = defineStore('proxy', {
         console.log('当前订阅列表:', this.subscriptions);
         console.log('当前节点列表:', this.proxies);
         
-        alert('订阅已导入并加载成功');
+        // 检查订阅是否真的添加成功
+        const subscriptionExists = this.subscriptions.some(s => s.name === name);
+        if (subscriptionExists) {
+          alert('订阅已导入并加载成功');
+        } else {
+          alert('订阅已添加到配置文件，但可能需要一些时间来下载和解析。请稍后刷新页面查看。');
+        }
       } catch (err) {
         console.error("Failed to import subscription:", err);
         alert("订阅导入失败: " + err);
+        throw err;
       }
     },
     
     // 删除订阅
     async removeSubscription(name: string) {
       try {
+        const invoke = await getInvoke();
         await invoke('remove_proxy_provider', { name });
         this.subscriptions = this.subscriptions.filter(s => s.name !== name);
         if (this.isConnected) {
