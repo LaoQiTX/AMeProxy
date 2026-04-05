@@ -6,8 +6,6 @@
   基于 <a href="https://github.com/MetaCubeX/mihomo">mihomo内核</a>的清新代理工具
 </h1>
 
-# AMeProxy - 雨代理 🌧️
-
 ## 项目目前仍在开发状态
 ## AMeProxy  其中的AMe取自日语中的雨（あめ）的五十音。
 
