@@ -6,12 +6,13 @@
 ## 🌟 技术栈
 
 - **前端框架**: [Vue 3 (Composition API)](https://vuejs.org/)
-- **状态管理**: [Pinia](https://pinia.vuejs.org/)
 - **样式处理**: [Tailwind CSS 4.0](https://tailwindcss.com/)
 - **图标库**: [Lucide Vue Next](https://lucide.dev/)
 - **动画库**: [Motion (Native CSS Transitions)](https://motion.dev/)
 - **构建工具**: [Vite 6](https://vitejs.dev/)
-- **目标平台**: Web / [Tauri](https://tauri.app/) (跨平台桌面端)
+- **目标平台**: Web / [Tauri](https://tauri.app/)
+- **代理内核**: [mihomo](https://github.com/MetaCubeX/mihomo) 
+
 
 ## 🚀 核心功能实现
 
@@ -32,6 +33,7 @@
 - [ ] 运行日志
 - [ ] 切换tun模式 
 - [ ] 自动下载内核
+- [ ] 后台运行
 
 
 
@@ -71,7 +73,7 @@ npm run build
 5. 构建安装包: `npx tauri build`
 
 > 鸣谢
-- [Mihomo API](https://mihomo.com/api) - 代理内核。
+- [mihomo](https://github.com/MetaCubeX/mihomo) - 代理内核。
 - [bugdey]https://gh.bugdey.us.kg - github下载加速。
 
 ---
