@@ -9,11 +9,41 @@ const themeStore = useThemeStore();
 
 const showNodeSelector = ref(false);
 
-const defaultGroup = computed(() => proxyStore.proxyGroups.find(g => g.name === '默认'));
+// 获取第一个代理组（通常是 GLOBAL 或默认组）
+const defaultGroup = computed(() => {
+  // 优先查找名为 "GLOBAL" 或 "默认" 的组，否则返回第一个组
+  return proxyStore.proxyGroups.find(g => g.name === 'GLOBAL') || 
+         proxyStore.proxyGroups.find(g => g.name === '默认') || 
+         proxyStore.proxyGroups[0];
+});
+
 const currentProxy = computed(() => {
   const selected = defaultGroup.value?.selected;
   return proxyStore.proxies.find(p => p.name === selected) || { name: selected || '未连接', type: '-', delay: 0 };
 });
+
+// 直接使用所有代理节点
+const availableNodes = computed(() => proxyStore.proxies);
+
+// 获取节点的延迟信息
+const getNodeDelay = (nodeName: string): number => {
+  const proxy = proxyStore.proxies.find(p => p.name === nodeName);
+  return proxy?.delay || 0;
+};
+
+// 提取地区名称，如 "日本|01" 从 "订阅名-日本|01" 或 "日本|01-xxx"
+const extractRegion = (name: string): string => {
+  if (!name || name === '未连接') return '未连';
+  
+  // 匹配地区模式：国家/地区名|数字，如 日本|01、美国|02、香港|01 等
+  const regionMatch = name.match(/([\u4e00-\u9fa5]{2,}|[A-Za-z]{2,})\|\d+/);
+  if (regionMatch) {
+    return regionMatch[0];
+  }
+  
+  // 如果没有匹配到，返回前4个字符
+  return name.substring(0, 4);
+};
 
 const currentDelay = computed(() => {
   if (currentProxy.value.delay > 0) return currentProxy.value.delay + ' ms';
@@ -23,7 +53,8 @@ const currentDelay = computed(() => {
 
 const selectNode = async (nodeName: string) => {
   try {
-    await proxyStore.switchProxy('默认', nodeName);
+    const groupName = defaultGroup.value?.name || 'GLOBAL';
+    await proxyStore.switchProxy(groupName, nodeName);
     showNodeSelector.value = false;
   } catch (error) {
     console.error('Failed to select node:', error);
@@ -66,10 +97,10 @@ const selectNode = async (nodeName: string) => {
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div class="lg:col-span-2 bg-white rounded-[2rem] p-8 shadow-sm border border-gray-50 relative overflow-hidden">
+      <div class="lg:col-span-2 bg-white rounded-[2rem] p-8 shadow-sm border border-gray-50 relative">
         <div class="relative z-10">
           <div class="flex items-center justify-between mb-8">
-            <h3 class="text-lg font-bold text-gray-800">当前连接节点 (默认组)</h3>
+            <h3 class="text-lg font-bold text-gray-800">当前连接节点 ({{ defaultGroup?.name || '未选择' }})</h3>
             <button @click="proxyStore.testLatency()" class="p-2 hover:bg-gray-50 rounded-xl transition-colors">
               <RefreshCw :class="['w-5 h-5 text-gray-400', proxyStore.isTesting ? 'animate-spin' : '']" />
             </button>
@@ -77,12 +108,12 @@ const selectNode = async (nodeName: string) => {
           
           <div class="flex items-center space-x-6">
             <div class="w-20 h-20 bg-gray-50 rounded-3xl flex items-center justify-center text-3xl font-bold text-gray-300">
-              {{ (currentProxy.name || '未连接').substring(0, 2) }}
+              {{ extractRegion(currentProxy.name).substring(0, 2) }}
             </div>
             <div class="relative">
               <div @click="showNodeSelector = !showNodeSelector" class="flex items-center justify-between cursor-pointer">
                 <div>
-                  <h4 class="text-2xl font-black text-gray-800">{{ currentProxy.name }}</h4>
+                  <h4 class="text-2xl font-black text-gray-800">{{ extractRegion(currentProxy.name) }}</h4>
                   <div class="flex items-center space-x-3 mt-2">
                     <span class="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[10px] font-bold rounded uppercase">{{ currentProxy.type }}</span>
                     <span class="flex items-center text-emerald-500 text-sm font-bold">
@@ -97,21 +128,29 @@ const selectNode = async (nodeName: string) => {
               </div>
               <div v-if="showNodeSelector" class="absolute top-full left-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-100 z-10 max-h-80 overflow-y-auto">
                 <div class="p-2">
+                  <!-- 无节点提示 -->
+                  <div v-if="availableNodes.length === 0" class="px-4 py-8 text-center text-gray-400">
+                    <p class="text-sm">暂无可用节点</p>
+                    <p class="text-xs mt-1">请确保代理已连接</p>
+                  </div>
                   <div 
-                    v-for="proxy in proxyStore.proxies" 
+                    v-for="proxy in availableNodes" 
                     :key="proxy.name"
                     @click="selectNode(proxy.name)"
                     class="px-4 py-2 rounded-lg hover:bg-gray-50 cursor-pointer flex items-center justify-between"
                   >
                     <div class="flex items-center space-x-2">
                       <span class="w-6 h-6 bg-gray-100 rounded flex items-center justify-center text-xs font-bold">
-                        {{ proxy.region || '?' }}
+                        {{ extractRegion(proxy.name).substring(0, 2) }}
                       </span>
-                      <span class="text-sm font-medium">{{ proxy.name }}</span>
+                      <span class="text-sm font-medium">{{ extractRegion(proxy.name) }}</span>
                     </div>
-                    <span :class="['text-xs font-bold', proxy.delay === -1 ? 'text-gray-400' : proxy.delay < 100 ? 'text-emerald-500' : 'text-amber-500']">
-                      {{ proxy.delay === -1 ? '...' : proxy.delay + 'ms' }}
-                    </span>
+                    <div class="flex items-center space-x-2">
+                      <span :class="['text-xs font-bold', proxy.delay === -1 ? 'text-gray-400' : proxy.delay < 100 ? 'text-emerald-500' : 'text-amber-500']">
+                        {{ proxy.delay > 0 ? proxy.delay + 'ms' : proxy.delay === -1 ? '超时' : '-' }}
+                      </span>
+                      <span v-if="defaultGroup?.selected === proxy.name" class="text-xs font-bold text-emerald-500">已选</span>
+                    </div>
                   </div>
                 </div>
               </div>
