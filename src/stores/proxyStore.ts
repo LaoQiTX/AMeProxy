@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import type { Connection, Rule, Log, ProxyGroup, Subscription, Proxy, TrafficData } from '../types';
+import { getProxies, changeProxy, testProxy, getProviders } from '../services/proxy';
 
 // 动态获取invoke函数
 const getInvoke = async () => {
@@ -171,8 +172,7 @@ export const useProxyStore = defineStore('proxy', {
         
         // 然后尝试从 API 获取订阅信息，更新节点数量
         try {
-          const invoke = await getInvoke();
-          const data = await invoke('get_providers');
+          const data = await getProviders();
           console.log('从 API 获取到的订阅信息:', data);
           
           // 处理每个订阅，更新节点数量
@@ -261,8 +261,21 @@ export const useProxyStore = defineStore('proxy', {
         this.rules = [];
       }
     },
-    connectConnectionsWebSocket() {
-      if (this.connWs) return;
+    async connectConnectionsWebSocket() {
+      if (this.connWs || !this.isConnected) return;
+      
+      // 检查代理是否正在运行
+      try {
+        const isRunning = await is_proxy_running();
+        if (!isRunning) {
+          console.log('Proxy not running, skipping connections WebSocket connection');
+          return;
+        }
+      } catch (e) {
+        console.log('Cannot check proxy status, skipping connections WebSocket connection');
+        return;
+      }
+      
       try {
         this.connWs = new WebSocket('ws://127.0.0.1:9090/connections');
         this.connWs.onmessage = (event) => {
@@ -279,21 +292,20 @@ export const useProxyStore = defineStore('proxy', {
               time: new Date(c.start).toLocaleTimeString()
             }));
           } catch (e) {
-            console.error("WebSocket message error:", e);
+            // Silent error for WebSocket message parsing
           }
         };
         this.connWs.onclose = () => {
           this.connWs = null;
           if (this.isConnected) {
-            setTimeout(() => this.connectConnectionsWebSocket(), 3000);
+            setTimeout(() => this.connectConnectionsWebSocket(), 5000);
           }
         };
-        this.connWs.onerror = (error) => {
-          console.warn("Connections WebSocket error:", error);
+        this.connWs.onerror = () => {
+          // Silent error - don't log to console
           this.connWs = null;
         };
       } catch (error) {
-        console.warn("Failed to connect to connections WebSocket:", error);
         this.connWs = null;
       }
     },
@@ -303,8 +315,21 @@ export const useProxyStore = defineStore('proxy', {
         this.connWs = null;
       }
     },
-    connectLogWebSocket() {
-      if (this.logWs) return;
+    async connectLogWebSocket() {
+      if (this.logWs || !this.isConnected) return;
+      
+      // 检查代理是否正在运行
+      try {
+        const isRunning = await is_proxy_running();
+        if (!isRunning) {
+          console.log('Proxy not running, skipping log WebSocket connection');
+          return;
+        }
+      } catch (e) {
+        console.log('Cannot check proxy status, skipping log WebSocket connection');
+        return;
+      }
+      
       try {
         this.logWs = new WebSocket('ws://127.0.0.1:9090/logs?level=info');
         this.logWs.onmessage = (event) => {
@@ -319,21 +344,20 @@ export const useProxyStore = defineStore('proxy', {
               this.logs.pop();
             }
           } catch (e) {
-            console.error("WebSocket message error:", e);
+            // Silent error for WebSocket message parsing
           }
         };
         this.logWs.onclose = () => {
           this.logWs = null;
           if (this.isConnected) {
-            setTimeout(() => this.connectLogWebSocket(), 3000);
+            setTimeout(() => this.connectLogWebSocket(), 5000);
           }
         };
-        this.logWs.onerror = (error) => {
-          console.warn("Log WebSocket error:", error);
+        this.logWs.onerror = () => {
+          // Silent error - don't log to console
           this.logWs = null;
         };
       } catch (error) {
-        console.warn("Failed to connect to log WebSocket:", error);
         this.logWs = null;
       }
     },
@@ -343,8 +367,21 @@ export const useProxyStore = defineStore('proxy', {
         this.logWs = null;
       }
     },
-    connectWebSocket() {
-      if (this.ws) return;
+    async connectWebSocket() {
+      if (this.ws || !this.isConnected) return;
+      
+      // 检查代理是否正在运行
+      try {
+        const isRunning = await is_proxy_running();
+        if (!isRunning) {
+          console.log('Proxy not running, skipping traffic WebSocket connection');
+          return;
+        }
+      } catch (e) {
+        console.log('Cannot check proxy status, skipping traffic WebSocket connection');
+        return;
+      }
+      
       try {
         this.ws = new WebSocket('ws://127.0.0.1:9090/traffic');
         this.ws.onmessage = (event) => {
@@ -355,21 +392,20 @@ export const useProxyStore = defineStore('proxy', {
               down: this.formatBytes(data.down) + '/s'
             };
           } catch (e) {
-            console.error("WebSocket message error:", e);
+            // Silent error for WebSocket message parsing
           }
         };
         this.ws.onclose = () => {
           this.ws = null;
           if (this.isConnected) {
-            setTimeout(() => this.connectWebSocket(), 3000);
+            setTimeout(() => this.connectWebSocket(), 5000);
           }
         };
-        this.ws.onerror = (error) => {
-          console.warn("Traffic WebSocket error:", error);
+        this.ws.onerror = () => {
+          // Silent error - don't log to console
           this.ws = null;
         };
       } catch (error) {
-        console.warn("Failed to connect to traffic WebSocket:", error);
         this.ws = null;
       }
     },
@@ -400,8 +436,7 @@ export const useProxyStore = defineStore('proxy', {
     },
     async fetchProxies() {
       try {
-        const invoke = await getInvoke();
-        const data = await invoke('get_proxies');
+        const data = await getProxies();
         console.log('Fetch proxies data:', data);
         // 更新代理组和节点
         const groups: ProxyGroup[] = [];
@@ -447,8 +482,7 @@ export const useProxyStore = defineStore('proxy', {
     },
     async switchProxy(groupName: string, proxyName: string) {
       try {
-        const invoke = await getInvoke();
-        await invoke('change_proxy', { group: groupName, proxy: proxyName });
+        await changeProxy(groupName, proxyName);
         // fetchProxies(); // will be updated by polling
         const group = this.proxyGroups.find(g => g.name === groupName);
         if (group) {
@@ -463,10 +497,9 @@ export const useProxyStore = defineStore('proxy', {
     async testLatency() {
       this.isTesting = true;
       try {
-        const invoke = await getInvoke();
         const promises = this.proxies.map(async (p) => {
           try {
-            const delay = await invoke('test_proxy', { proxy: p.name });
+            const delay = await testProxy(p.name);
             p.delay = delay;
           } catch (err) {
             console.error("Test proxy error:", err);

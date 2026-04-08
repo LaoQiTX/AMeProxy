@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue';
 import { RefreshCw, Plus, Trash2, ChevronRight, Loader2, Link, Server } from 'lucide-vue-next';
-import { testProxy, changeProxy, startCore, is_proxy_running, getProviders } from '../../services/proxy';
+import { testProxy, changeProxy, startCore, is_proxy_running, getProviders, getProviderProxies, triggerProviderHealthCheck } from '../../services/proxy';
 import { useProxyStore } from '../../stores/proxyStore';
 
 const proxyStore = useProxyStore();
