@@ -9,6 +9,19 @@ const themeStore = useThemeStore();
 
 const showNodeSelector = ref(false);
 
+// 格式化流量字节
+const formatBytes = (bytes: number) => {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+// 累计流量（本连接会话）
+const totalDown = computed(() => formatBytes(proxyStore.trafficTotal.down));
+const totalUp = computed(() => formatBytes(proxyStore.trafficTotal.up));
+
 // 获取第一个代理组（通常是 GLOBAL 或默认组）
 const defaultGroup = computed(() => {
   // 优先查找名为 "GLOBAL" 或 "默认" 的组，否则返回第一个组
@@ -159,12 +172,12 @@ const selectNode = async (nodeName: string) => {
 
           <div class="mt-12 grid grid-cols-2 gap-4">
             <div class="bg-gray-50/50 rounded-2xl p-4">
-              <p class="text-xs text-gray-400 font-bold uppercase mb-1">今日流量</p>
-              <p class="text-lg font-bold text-gray-700">-</p>
+              <p class="text-xs text-gray-400 font-bold uppercase mb-1">下载总量</p>
+              <p class="text-lg font-bold text-gray-700">{{ proxyStore.isConnected ? totalDown : '-' }}</p>
             </div>
             <div class="bg-gray-50/50 rounded-2xl p-4">
-              <p class="text-xs text-gray-400 font-bold uppercase mb-1">本月流量</p>
-              <p class="text-lg font-bold text-gray-700">-</p>
+              <p class="text-xs text-gray-400 font-bold uppercase mb-1">上传总量</p>
+              <p class="text-lg font-bold text-gray-700">{{ proxyStore.isConnected ? totalUp : '-' }}</p>
             </div>
           </div>
         </div>

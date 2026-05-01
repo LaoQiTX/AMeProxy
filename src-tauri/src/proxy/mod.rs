@@ -7,7 +7,7 @@
 // 导入进程管理子模块
 mod process;
 // 导入配置管理子模块
-mod config;
+pub mod config;
 // 导入路径管理子模块
 pub mod paths;
 

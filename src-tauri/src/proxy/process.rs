@@ -7,9 +7,9 @@
 
 use std::sync::Mutex;
 use std::process::Child;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use crate::proxy::config::ClashConfig;
-use std::time::Duration;
 
 /// 应用状态结构体
 ///
@@ -17,13 +17,34 @@ use std::time::Duration;
 pub struct AppState {
     /// 代理进程的互斥锁，用于线程安全地访问和修改进程状态
     pub proxy_process: Mutex<Option<Child>>,
+    /// 代理启动时间，用于计算运行时长
+    pub start_time: Mutex<Option<Instant>>,
 }
 
 impl AppState {
+    /// 获取运行时长（秒）
+    pub fn get_uptime_secs(&self) -> u64 {
+        if let Ok(guard) = self.start_time.lock() {
+            if let Some(start) = *guard {
+                return start.elapsed().as_secs();
+            }
+        }
+        0
+    }
     /// 启动代理内核
     pub async fn start_core(&self, _app_handle: &AppHandle) -> Result<(), anyhow::Error> {
+        // 检查是否已经在运行
+        {
+            let guard = self.proxy_process.lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+            if guard.is_some() {
+                println!("Kernel already running, skipping start");
+                return Ok(());
+            }
+        }
+
         // 确保配置文件存在
-        let config_file = ClashConfig::generate_file().await?;
+        let config_file = ClashConfig::generate_file()?;
         println!("Config file: {:?}", config_file);
 
         let config_dir = config_file.parent().unwrap();
@@ -66,6 +87,10 @@ impl AppState {
 
         // 保存进程
         *self.proxy_process.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))? = Some(child);
+        // 记录启动时间
+        if let Ok(mut time_guard) = self.start_time.lock() {
+            *time_guard = Some(Instant::now());
+        }
         println!("Kernel process started successfully");
 
         // 等待内核初始化
@@ -101,6 +126,10 @@ impl AppState {
                 child.wait()?;
                 println!("Kernel process stopped");
             }
+        }
+        // 清除启动时间
+        if let Ok(mut time_guard) = self.start_time.lock() {
+            *time_guard = None;
         }
         Ok(())
     }

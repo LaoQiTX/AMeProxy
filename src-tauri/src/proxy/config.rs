@@ -85,7 +85,7 @@ impl ClashConfig {
 
     /// 确保配置文件存在，不存在则生成默认配置
     /// 配置文件路径: configs/mihomo/config.yaml
-    pub async fn generate_file() -> Result<PathBuf, anyhow::Error> {
+    pub fn generate_file() -> Result<PathBuf, anyhow::Error> {
         let config_dir =
             crate::proxy::paths::get_config_dir().map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -103,8 +103,8 @@ impl ClashConfig {
             let default_config = r#"mixed-port: 7890
 allow-lan: true
 external-controller: 127.0.0.1:9090
-
-proxy-providers:
+mode: rule
+log-level: info
 
 proxies:
   - name: "直连"

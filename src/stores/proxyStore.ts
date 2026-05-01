@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import type { Connection, Rule, Log, ProxyGroup, Subscription, Proxy, TrafficData } from '../types';
-import { getProxies, changeProxy, testProxy, getProviders } from '../services/proxy';
+import { getProxies, changeProxy, testProxy, getProviders, closeAllConnections, is_proxy_running } from '../services/proxy';
 
 // 动态获取invoke函数
 const getInvoke = async () => {
@@ -56,6 +56,10 @@ export const useProxyStore = defineStore('proxy', {
       up: '0 KB/s',
       down: '0 KB/s'
     } as TrafficData,
+    // 累计流量（字节）
+    trafficTotal: { up: 0, down: 0 } as { up: number, down: number },
+    // 运行时长（秒）
+    uptime: 0,
     // API Polling interval
     pollInterval: null as any,
     ws: null as WebSocket | null,
@@ -396,6 +400,9 @@ export const useProxyStore = defineStore('proxy', {
               up: this.formatBytes(data.up) + '/s',
               down: this.formatBytes(data.down) + '/s'
             };
+            // 累计流量
+            this.trafficTotal.up += data.up || 0;
+            this.trafficTotal.down += data.down || 0;
           } catch (e) {
             // Silent error for WebSocket message parsing
           }
@@ -431,6 +438,7 @@ export const useProxyStore = defineStore('proxy', {
       if (this.pollInterval) return;
       this.pollInterval = setInterval(() => {
         this.fetchProxies();
+        this.fetchUptime();
       }, 2000);
     },
     stopPolling() {
@@ -663,6 +671,27 @@ export const useProxyStore = defineStore('proxy', {
     // 切换标签页
     setCurrentTab(tab: string) {
       this.currentTab = tab;
+    },
+    // 获取运行时长
+    async fetchUptime() {
+      try {
+        const invoke = await getInvoke();
+        const uptime = await invoke<number>('get_uptime');
+        if (typeof uptime === 'number' && uptime > 0) {
+          this.uptime = uptime;
+        }
+      } catch {
+        // 静默失败
+      }
+    },
+    // 关闭所有连接
+    async closeAllConnections() {
+      try {
+        await closeAllConnections();
+        this.connections = [];
+      } catch (err) {
+        console.error("Failed to close all connections:", err);
+      }
     }
   }
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { Zap, BarChart3 } from 'lucide-vue-next';
 import { useProxyStore } from '../../stores/proxyStore';
 import { useThemeStore } from '../../stores/themeStore';
@@ -10,6 +10,16 @@ const themeStore = useThemeStore();
 const toggleConnection = () => {
   proxyStore.toggleConnection();
 };
+
+// 格式化运行时长（秒 → HH:MM:SS）
+const formattedUptime = computed(() => {
+  const s = proxyStore.uptime;
+  if (!s || s <= 0) return '-';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+});
 
 const getTabTitle = computed(() => {
   switch (proxyStore.currentTab) {
@@ -32,7 +42,7 @@ const getTabTitle = computed(() => {
         {{ getTabTitle }}
       </h2>
       <div v-if="proxyStore.currentTab === 'dashboard'" class="px-3 py-1 bg-white/60 rounded-full text-xs font-medium text-gray-500 border border-gray-100">
-        运行时间: 12:45:08
+        运行时间: {{ formattedUptime }}
       </div>
     </div>
 

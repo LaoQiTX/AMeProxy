@@ -143,14 +143,10 @@ pub async fn get_logs(level: Option<String>) -> Result<String, String> {
     api().get_text(&path).await
 }
 
-/// 获取运行时长
+/// 获取运行时长（从进程启动时间计算）
 #[command]
-pub async fn get_uptime() -> Result<u64, String> {
-    let data: Value = api().get_json("/status").await?;
-
-    data["uptime"]
-        .as_u64()
-        .ok_or_else(|| "Invalid uptime value".to_string())
+pub fn get_uptime(state: State<AppState>) -> Result<u64, String> {
+    Ok(state.get_uptime_secs())
 }
 
 /// 切换TUN模式

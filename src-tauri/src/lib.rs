@@ -12,6 +12,7 @@ mod proxy;
 mod commands;
 
 // 导入代理模块中的 AppState 函数
+use proxy::config::ClashConfig;
 use proxy::AppState;
 // 导入 commands 模块中的所有命令
 use commands::*;
@@ -29,6 +30,7 @@ pub fn run() {
     // 管理应用状态，主要是代理进程的状态
     .manage(AppState {
         proxy_process: std::sync::Mutex::new(None),
+        start_time: std::sync::Mutex::new(None),
     })
     // 设置应用，添加日志插件并启动代理
     .setup(|app| {
@@ -41,7 +43,12 @@ pub fn run() {
         )?;
       }
 
-      // 自动启动代理内核
+      // 确保配置文件存在后自动启动代理内核
+      match ClashConfig::generate_file() {
+        Ok(path) => println!("Config file ready: {:?}", path),
+        Err(e) => println!("Warning: Failed to generate config: {}", e),
+      }
+
       if let Some(app_state) = app.try_state::<AppState>() {
         if let Ok(mut process) = app_state.proxy_process.lock() {
           if process.is_none() {

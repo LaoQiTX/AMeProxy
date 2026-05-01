@@ -66,7 +66,7 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     console.error(`API 请求错误 ${endpoint}:`, error);
     //  fallback 到 Tauri 命令
     const invoke = await getInvoke();
-    return await invoke<T>(endpoint.replace(/\//g, '_').substring(1), options.body ? JSON.parse(options.body as string) : {});
+    return await invoke<T>(endpoint.replace(/\//g, '_').substring(1), options.body ? JSON.parse(options.body as string) : {}) as T;
   }
 }
 
@@ -138,4 +138,9 @@ export async function toggleTun(enabled: boolean) {
 export async function getUptime() {
   const invoke = await getInvoke();
   return await invoke<number>('get_uptime')
+}
+
+// 关闭所有连接
+export async function closeAllConnections() {
+  return await apiRequest('/connections', { method: 'DELETE' });
 }

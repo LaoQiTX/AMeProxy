@@ -23,3 +23,6 @@ docs/
 
 */config.yaml
 configs/mihomo/config.yaml
+
+CLAUDE.md
+.claude/
