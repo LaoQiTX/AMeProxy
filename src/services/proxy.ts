@@ -61,6 +61,11 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
       throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
     }
 
+    // 204 No Content 不需要解析 JSON
+    if (response.status === 204) {
+      return {} as T;
+    }
+
     return await response.json();
   } catch (error) {
     console.error(`API 请求错误 ${endpoint}:`, error);

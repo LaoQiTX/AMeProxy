@@ -106,6 +106,8 @@ external-controller: 127.0.0.1:9090
 mode: rule
 log-level: info
 
+proxy-providers: {}
+
 proxies:
   - name: "直连"
     type: direct

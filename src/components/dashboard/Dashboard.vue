@@ -22,11 +22,11 @@ const formatBytes = (bytes: number) => {
 const totalDown = computed(() => formatBytes(proxyStore.trafficTotal.down));
 const totalUp = computed(() => formatBytes(proxyStore.trafficTotal.up));
 
-// 获取第一个代理组（通常是 GLOBAL 或默认组）
+// 获取当前代理组（优先应用自定义的"默认"组，而非 mihomo 内置的 GLOBAL）
+// GLOBAL 只包含策略组级别的选项，而"默认"组包含所有订阅节点
 const defaultGroup = computed(() => {
-  // 优先查找名为 "GLOBAL" 或 "默认" 的组，否则返回第一个组
-  return proxyStore.proxyGroups.find(g => g.name === 'GLOBAL') || 
-         proxyStore.proxyGroups.find(g => g.name === '默认') || 
+  return proxyStore.proxyGroups.find(g => g.name === '默认') ||
+         proxyStore.proxyGroups.find(g => g.name === 'GLOBAL') ||
          proxyStore.proxyGroups[0];
 });
 
@@ -35,8 +35,11 @@ const currentProxy = computed(() => {
   return proxyStore.proxies.find(p => p.name === selected) || { name: selected || '未连接', type: '-', delay: 0 };
 });
 
-// 直接使用所有代理节点
-const availableNodes = computed(() => proxyStore.proxies);
+// 只显示当前组可选节点（过滤掉内置类型和不在当前组中的节点）
+const availableNodes = computed(() => {
+  const groupOptions = defaultGroup.value?.options || [];
+  return proxyStore.proxies.filter(p => groupOptions.includes(p.name));
+});
 
 // 获取节点的延迟信息
 const getNodeDelay = (nodeName: string): number => {
@@ -47,17 +50,18 @@ const getNodeDelay = (nodeName: string): number => {
 // 提取地区名称，如 "日本|01" 从 "订阅名-日本|01" 或 "日本|01-xxx"
 const extractRegion = (name: string): string => {
   if (!name || name === '未连接') return '未连';
-  
-  // 匹配地区模式：国家/地区名|数字，如 日本|01、美国|02、香港|01 等
-  const regionMatch = name.match(/([\u4e00-\u9fa5]{2,}|[A-Za-z]{2,})\|\d+/);
-  if (regionMatch) {
-    return regionMatch[0];
-  }
-  
-  // 如果没有匹配到，返回前4个字符
-  return name.substring(0, 4);
-};
 
+  // 去除 [provider] 前缀，如 [mj]日本-优化2  →  日本-优化2
+  const cleanName = name.replace(/^\[.*?\]/, '');
+
+  // 提取中文或英文地区名（第一个连续词）
+  const regionMatch = cleanName.match(/^([一-龥A-Za-z]+)/);
+  if (regionMatch) {
+    return regionMatch[1];
+  }
+
+  return cleanName.substring(0, 4) || name.substring(0, 4);
+};
 const currentDelay = computed(() => {
   if (currentProxy.value.delay > 0) return currentProxy.value.delay + ' ms';
   if (currentProxy.value.delay === -1) return 'Timeout';

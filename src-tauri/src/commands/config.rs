@@ -120,7 +120,27 @@ pub fn add_proxy_provider(name: String, url: String) -> Result<String, String> {
         .ok_or_else(|| "proxy-providers section not found".to_string())?;
 
     let provider = build_provider_mapping(&name, &url);
-    providers.insert(YamlValue::String(name), YamlValue::Mapping(provider));
+    providers.insert(YamlValue::String(name.clone()), YamlValue::Mapping(provider));
+
+    // 自动将 provider 添加到所有 proxy-groups 的 use 列表中
+    // 这样 provider 的节点会自动出现在策略组中，用户才能选择和使用
+    if let Some(groups) = yaml.get_mut("proxy-groups").and_then(|v| v.as_sequence_mut()) {
+        let provider_key = YamlValue::String(name.clone());
+        for group in groups.iter_mut() {
+            if let Some(group_map) = group.as_mapping_mut() {
+                let use_key = YamlValue::String("use".into());
+                if let Some(existing) = group_map.get_mut(&use_key) {
+                    if let Some(seq) = existing.as_sequence_mut() {
+                        if !seq.contains(&provider_key) {
+                            seq.push(YamlValue::String(name.clone()));
+                        }
+                    }
+                } else {
+                    group_map.insert(use_key, YamlValue::Sequence(vec![YamlValue::String(name.clone())]));
+                }
+            }
+        }
+    }
 
     let file =
         fs::File::create(&config_path).map_err(|e| format!("Failed to write config: {}", e))?;
