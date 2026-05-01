@@ -8,6 +8,8 @@
 mod process;
 // 导入配置管理子模块
 mod config;
+// 导入路径管理子模块
+pub mod paths;
 
 // 导出子模块中的所有内容
 pub use process::*;

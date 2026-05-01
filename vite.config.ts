@@ -20,7 +20,8 @@ export default defineConfig(({mode}) => {
       watch: {
         ignored: [
           '**/configs/**',
-          '**/src-tauri/configs/**'
+          '**/src-tauri/configs/**',
+          '**/src-tauri/sidecar/**'
         ]
       }
     },

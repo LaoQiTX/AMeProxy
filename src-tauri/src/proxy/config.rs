@@ -1,13 +1,9 @@
 //! 配置文件管理模块
-//! 
+//!
 //! 该模块负责配置文件的管理，包括：
 //! 1. 生成默认配置文件
 //! 2. 获取配置文件路径
-//! 3. 添加代理订阅
-//! 4. 更新代理订阅
-//! 5. 删除代理订阅
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
@@ -86,46 +82,21 @@ impl ClashConfig {
         // 目前返回默认配置
         Ok(Self::default())
     }
-    
-    /// 生成配置文件
-    /// 
-    /// 配置文件应该和内核在同一目录下：src-tauri/sidecar/
+
+    /// 确保配置文件存在，不存在则生成默认配置
+    /// 配置文件路径: configs/mihomo/config.yaml
     pub async fn generate_file() -> Result<PathBuf, anyhow::Error> {
-        // 获取项目根目录
-        let mut project_root = match env::current_dir() {
-            Ok(path) => path,
-            Err(e) => {
-                println!("获取当前目录失败: {}", e);
-                return Err(anyhow::anyhow!("Failed to get current directory: {}", e));
-            }
-        };
-        
-        // 检查当前目录是否已经是 src-tauri
-        if project_root.file_name().unwrap_or_default() == "src-tauri" {
-            // 如果是 src-tauri 目录，直接使用 sidecar 子目录
-            project_root = project_root.parent().unwrap_or(&project_root).to_path_buf();
-        }
-        
-        let sidecar_dir = project_root
-            .join("src-tauri")
-            .join("sidecar");
-        
-        // 打印路径信息，便于调试
-        println!("Project root: {:?}", project_root);
-        println!("Sidecar directory: {:?}", sidecar_dir);
-        
+        let config_dir =
+            crate::proxy::paths::get_config_dir().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        println!("Config directory: {:?}", config_dir);
+
         // 确保目录存在
-        match fs::create_dir_all(&sidecar_dir) {
-            Ok(_) => println!("Sidecar directory created or already exists"),
-            Err(e) => {
-                println!("创建目录失败: {}", e);
-                return Err(anyhow::anyhow!("Failed to create sidecar directory: {}", e));
-            }
-        }
-        
-        let file_path = sidecar_dir.join("config.yaml");
+        fs::create_dir_all(&config_dir)?;
+
+        let file_path = config_dir.join("config.yaml");
         println!("Config file path: {:?}", file_path);
-        
+
         // 如果配置文件不存在，生成默认配置
         if !file_path.exists() {
             println!("Config file not found, generating default...");
@@ -148,18 +119,13 @@ proxy-groups:
 rules:
   - MATCH,默认
 "#;
-            
-            match fs::write(&file_path, default_config) {
-                Ok(_) => println!("Default config generated successfully: {:?}", file_path),
-                Err(e) => {
-                    println!("写入配置文件失败: {}", e);
-                    return Err(anyhow::anyhow!("Failed to write config file: {}", e));
-                }
-            }
+
+            fs::write(&file_path, default_config)?;
+            println!("Default config generated successfully: {:?}", file_path);
         } else {
             println!("Config file already exists: {:?}", file_path);
         }
-        
+
         Ok(file_path)
     }
 }

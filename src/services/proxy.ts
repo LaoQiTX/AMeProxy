@@ -121,3 +121,21 @@ export async function getProviderProxies(providerName: string) {
 export async function triggerProviderHealthCheck(providerName: string) {
   return await apiRequest(`/providers/proxies/${encodeURIComponent(providerName)}/healthcheck`);
 }
+
+// 获取 TUN 模式状态
+export async function getTunStatus() {
+  const invoke = await getInvoke();
+  return await invoke<boolean>('get_tun_status')
+}
+
+// 切换 TUN 模式
+export async function toggleTun(enabled: boolean) {
+  const invoke = await getInvoke();
+  return await invoke('toggle_tun', { enabled })
+}
+
+// 获取运行时长
+export async function getUptime() {
+  const invoke = await getInvoke();
+  return await invoke<number>('get_uptime')
+}

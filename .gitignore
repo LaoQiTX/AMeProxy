@@ -20,3 +20,6 @@ src-tauri/sidecar/
 
 # 文档
 docs/
+
+*/config.yaml
+configs/mihomo/config.yaml

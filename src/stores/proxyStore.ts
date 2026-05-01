@@ -67,30 +67,35 @@ export const useProxyStore = defineStore('proxy', {
     async initialize() {
       try {
         console.log('Starting initialize...');
-        // 暂时注释掉初始化逻辑，避免错误
-        // const invoke = await getInvoke();
-        // console.log('Got invoke function:', typeof invoke);
-        // 
-        // // 检查代理是否已经在运行
-        // if (typeof invoke === 'function') {
-        //   console.log('Calling is_proxy_running...');
-        //   const isRunning = await invoke('is_proxy_running');
-        //   console.log('is_proxy_running result:', isRunning);
-        //   
-        //   if (isRunning) {
-        //     // 不自动连接到代理，只获取基本信息
-        //     // this.isConnected = true;
-        //     // this.startPolling();
-        //     // this.connectWebSocket();
-        //     // this.connectLogWebSocket();
-        //     // this.connectConnectionsWebSocket();
-        //     // this.fetchRules();
-        //     // this.fetchProviders(); // 获取订阅信息
-        //     // this.fetchProxies(); // 获取代理节点
-        //   }
-        // } else {
-        //   console.error('Invoke function is not a function:', invoke);
-        // }
+        const invoke = await getInvoke();
+
+        if (typeof invoke === 'function') {
+          // 检查代理是否已经在运行
+          console.log('Calling is_proxy_running...');
+          const isRunning = await invoke('is_proxy_running');
+          console.log('is_proxy_running result:', isRunning);
+
+          if (isRunning) {
+            this.isConnected = true;
+            this.startPolling();
+            this.connectWebSocket();
+            this.connectLogWebSocket();
+            this.connectConnectionsWebSocket();
+            this.fetchRules();
+            this.fetchProviders();
+            this.fetchProxies();
+
+            // 获取 TUN 模式状态
+            try {
+              const tunStatus = await invoke('get_tun_status');
+              this.tunMode = tunStatus;
+            } catch (e) {
+              console.warn('Failed to get TUN status:', e);
+            }
+          }
+        } else {
+          console.error('Invoke function is not a function:', invoke);
+        }
       } catch (err) {
         console.error("Failed to initialize:", err);
       }
@@ -639,9 +644,17 @@ export const useProxyStore = defineStore('proxy', {
         alert("订阅删除失败: " + err);
       }
     },
-    // 切换 TUN 模式
-    toggleTunMode() {
+    // 切换 TUN 模式（乐观更新，失败回滚）
+    async toggleTunMode() {
+      const prevState = this.tunMode;
       this.tunMode = !this.tunMode;
+      try {
+        const invoke = await getInvoke();
+        await invoke('toggle_tun', { enabled: this.tunMode });
+      } catch (err) {
+        console.error("Failed to toggle TUN mode:", err);
+        this.tunMode = prevState;
+      }
     },
     // 切换内核
     setKernel(kernel: string) {
