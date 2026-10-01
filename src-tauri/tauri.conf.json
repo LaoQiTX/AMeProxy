@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AMeProxy",
-  "version": "0.1.0",
-  "identifier": "com.AMeProxy.dev",
+  "version": "1.0.0",
+  "identifier": "com.ameproxy.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
@@ -14,7 +14,9 @@
       {
         "title": "AMeProxy",
         "width": 1140,
-        "height": 630,
+        "height": 760,
+        "minWidth": 480,
+        "minHeight": 560,
         "resizable": true,
         "fullscreen": false
       }

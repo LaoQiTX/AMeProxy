@@ -1,145 +1,292 @@
-//! 代理进程管理模块
-//!
-//! 该模块负责代理进程的启动和停止操作，包括：
-//! 1. 启动 Mihomo 代理进程
-//! 2. 停止 Mihomo 代理进程
-//! 3. 管理代理进程的状态
+//! Serializes lifecycle and configuration operations on the owned kernel.
+use crate::{
+    commands::api_client::ApiClient,
+    proxy::{config::ClashConfig, config_file, paths, subscriptions, system_proxy},
+};
+use std::{
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
+};
 
-use std::sync::Mutex;
-use std::process::Child;
-use std::time::{Duration, Instant};
-use tauri::AppHandle;
-use crate::proxy::config::ClashConfig;
-
-/// 应用状态结构体
-///
-/// 用于管理应用的全局状态，主要是代理进程的状态
+#[derive(Default)]
 pub struct AppState {
-    /// 代理进程的互斥锁，用于线程安全地访问和修改进程状态
-    pub proxy_process: Mutex<Option<Child>>,
-    /// 代理启动时间，用于计算运行时长
-    pub start_time: Mutex<Option<Instant>>,
+    pub operation: tokio::sync::Mutex<()>,
+    proxy_process: Mutex<Option<OwnedKernel>>,
+    start_time: Mutex<Option<Instant>>,
+    pub closing: AtomicBool,
+    recovered: AtomicBool,
+    pub lifecycle_error: Mutex<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyStatus {
+    kernel_running: bool,
+    system_proxy_enabled: bool,
+    recovery_pending: bool,
+    error: String,
 }
 
 impl AppState {
-    /// 获取运行时长（秒）
     pub fn get_uptime_secs(&self) -> u64 {
-        if let Ok(guard) = self.start_time.lock() {
-            if let Some(start) = *guard {
-                return start.elapsed().as_secs();
-            }
-        }
-        0
+        self.start_time
+            .lock()
+            .ok()
+            .and_then(|t| *t)
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0)
     }
-    /// 启动代理内核
-    pub async fn start_core(&self, _app_handle: &AppHandle) -> Result<(), anyhow::Error> {
-        // 检查是否已经在运行
-        {
-            let guard = self.proxy_process.lock()
-                .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-            if guard.is_some() {
-                println!("Kernel already running, skipping start");
-                return Ok(());
+
+    pub fn is_running(&self) -> Result<bool, String> {
+        let mut process = self.proxy_process.lock().map_err(|e| e.to_string())?;
+        let alive = match process.as_mut() {
+            Some(child) => child.try_wait().map_err(|e| e.to_string())?.is_none(),
+            None => false,
+        };
+        if !alive {
+            *process = None;
+            *self.start_time.lock().map_err(|e| e.to_string())? = None;
+        }
+        Ok(alive)
+    }
+
+    pub async fn start_core(&self) -> Result<(), String> {
+        let _operation = self.operation.lock().await;
+        self.start_core_locked().await
+    }
+
+    async fn start_core_locked(&self) -> Result<(), String> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err("应用正在退出".into());
+        }
+        if !self.recovered.load(Ordering::SeqCst) {
+            system_proxy::restore()?;
+            self.recovered.store(true, Ordering::SeqCst);
+        }
+        if self.is_running()? {
+            return Ok(());
+        }
+        let config = ClashConfig::generate_file().map_err(|e| e.to_string())?;
+        let api = ApiClient::new()?;
+        let listener = std::net::TcpListener::bind(api.config.address)
+            .map_err(|e| format!("控制端口 {} 不可用: {}", api.config.address, e))?;
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&config).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let mut proxy_listeners = Vec::new();
+        for name in ["mixed-port", "port", "socks-port"] {
+            if let Some(port) = yaml[name].as_u64().filter(|p| *p > 0 && *p <= 65535) {
+                proxy_listeners.push(
+                    std::net::TcpListener::bind(("0.0.0.0", port as u16))
+                        .map_err(|e| format!("代理端口 {name}={port} 不可用: {e}"))?,
+                );
             }
         }
-
-        // 确保配置文件存在
-        let config_file = ClashConfig::generate_file()?;
-        println!("Config file: {:?}", config_file);
-
-        let config_dir = config_file.parent().unwrap();
-        println!("Config directory: {:?}", config_dir);
-
-        // 获取 sidecar 目录（存放内核可执行文件）
-        let sidecar_dir = crate::proxy::paths::get_sidecar_dir()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        // 查找内核可执行文件
-        let mut sidecar_path = None;
-        let entries = std::fs::read_dir(&sidecar_dir)?;
-        println!("Files in sidecar directory:");
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let file_name = entry.file_name();
-                let file_name_str = file_name.to_str().unwrap_or("");
-                println!("  {:?}", file_name);
-                if file_name_str.contains("mihomo") && file_name_str.ends_with(".exe") {
-                    sidecar_path = Some(entry.path());
-                    break;
-                }
-            }
-        }
-
-        let sidecar_path = sidecar_path.ok_or_else(|| {
-            anyhow::anyhow!("Kernel file not found in sidecar directory")
-        })?;
-
-        println!("Kernel path: {:?}", sidecar_path);
-        println!("Starting kernel process with -d {:?}...", config_dir);
-
-        // 使用 -d 参数将工作目录设为配置文件目录
-        // 这样 mihomo 会在该目录读取 config.yaml 并创建 cache.db 等运行时文件，
-        // 避免在 src-tauri/ 下生成文件触发 Tauri 热重载
-        let child = std::process::Command::new(&sidecar_path)
+        drop(proxy_listeners);
+        drop(listener);
+        let runtime_path = config.parent().unwrap().join("runtime.yaml");
+        config_file::atomic_write(&runtime_path, &subscriptions::runtime_text(&yaml)?)?;
+        let log_path = config.parent().unwrap().join("kernel.log");
+        let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
+        let mut command = Command::new(paths::get_kernel_path()?);
+        command
             .arg("-d")
-            .arg(config_dir)
-            .spawn()?;
-
-        // 保存进程
-        *self.proxy_process.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))? = Some(child);
-        // 记录启动时间
-        if let Ok(mut time_guard) = self.start_time.lock() {
-            *time_guard = Some(Instant::now());
+            .arg(config.parent().unwrap())
+            .arg("-f")
+            .arg(&runtime_path)
+            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
+            .stderr(Stdio::from(log));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
         }
-        println!("Kernel process started successfully");
-
-        // 等待内核初始化
-        println!("Waiting for kernel to initialize...");
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // 检查内核是否真的启动了（尝试连接 API）
-        match Self::check_kernel_running().await {
-            Ok(true) => {
-                println!("Kernel is running and API is accessible");
-                Ok(())
+        let child = command
+            .spawn()
+            .map_err(|e| format!("无法启动内核: {}", e))?;
+        *self.proxy_process.lock().map_err(|e| e.to_string())? = Some(OwnedKernel::new(child)?);
+        *self.start_time.lock().map_err(|e| e.to_string())? = Some(Instant::now());
+        let result = tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                if !self.is_running()? {
+                    return Err(format!(
+                        "内核启动后退出，请检查配置和端口。日志: {}",
+                        log_path.display()
+                    ));
+                }
+                if let Ok(version) = api.get_json::<serde_json::Value>("/version").await {
+                    if version["version"].is_string() && self.is_running()? {
+                        return Ok(());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(150)).await;
             }
-            Ok(false) => {
-                println!("Warning: Kernel process started but API is not accessible yet");
-                // 再等待一段时间
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                Ok(())
-            }
-            Err(e) => {
-                println!("Warning: Failed to check kernel status: {}", e);
-                // 进程已启动，但无法确认状态，继续
-                Ok(())
-            }
+        })
+        .await
+        .unwrap_or_else(|_| Err("内核启动超时，控制接口未就绪".into()));
+        if result.is_err() {
+            self.stop_owned()?;
         }
+        result
     }
 
-    /// 停止代理内核
-    pub fn stop_core(&self) -> Result<(), anyhow::Error> {
-        if let Ok(mut guard) = self.proxy_process.lock() {
-            if let Some(mut child) = guard.take() {
-                println!("Stopping kernel process...");
-                child.kill()?;
-                child.wait()?;
-                println!("Kernel process stopped");
+    fn stop_owned(&self) -> Result<(), String> {
+        let mut process = self.proxy_process.lock().map_err(|e| e.to_string())?;
+        if let Some(child) = process.as_mut() {
+            if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                child.kill().map_err(|e| format!("停止内核失败: {}", e))?;
             }
+            child.wait().map_err(|e| e.to_string())?;
         }
-        // 清除启动时间
-        if let Ok(mut time_guard) = self.start_time.lock() {
-            *time_guard = None;
-        }
+        *process = None;
+        *self.start_time.lock().map_err(|e| e.to_string())? = None;
         Ok(())
     }
 
-    /// 检查内核是否正在运行
-    async fn check_kernel_running() -> Result<bool, anyhow::Error> {
-        // 尝试连接 mihomo API
-        match std::net::TcpStream::connect("127.0.0.1:9090") {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
+    pub async fn stop_core(&self) -> Result<(), String> {
+        let _operation = self.operation.lock().await;
+        // Never leave Windows pointing at a listener we are about to stop.
+        system_proxy::restore()?;
+        self.stop_owned()
+    }
+
+    pub async fn start_proxy(&self) -> Result<(), String> {
+        let _operation = self.operation.lock().await;
+        self.start_core_locked().await?;
+        let config: serde_json::Value = ApiClient::new()?.get_json("/configs").await?;
+        let port = ["mixed-port", "port"]
+            .into_iter()
+            .filter_map(|key| config[key].as_u64())
+            .find(|port| *port > 0 && *port <= u16::MAX as u64)
+            .ok_or("请在配置中启用 mixed-port 或 HTTP port")? as u16;
+        // API readiness alone does not prove the HTTP listener is accepting connections.
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .map_err(|_| "代理端口连接超时")?
+        .map_err(|e| format!("代理端口尚未就绪: {e}"))?;
+        if !self.is_running()? {
+            return Err("内核已退出，未开启系统代理".into());
         }
+        system_proxy::enable(port)?;
+        *self.lifecycle_error.lock().map_err(|e| e.to_string())? = String::new();
+        Ok(())
+    }
+
+    pub async fn stop_proxy(&self) -> Result<(), String> {
+        let _operation = self.operation.lock().await;
+        system_proxy::restore()?;
+        // Closing the proxy also stops an active TUN session and existing connections.
+        self.stop_owned()?;
+        *self.lifecycle_error.lock().map_err(|e| e.to_string())? = String::new();
+        Ok(())
+    }
+
+    pub async fn proxy_status(&self) -> Result<ProxyStatus, String> {
+        let _operation = self.operation.lock().await;
+        Ok(ProxyStatus {
+            kernel_running: self.is_running()?,
+            system_proxy_enabled: system_proxy::enabled()?,
+            recovery_pending: system_proxy::recovery_pending()?,
+            error: self
+                .lifecycle_error
+                .lock()
+                .map_err(|e| e.to_string())?
+                .clone(),
+        })
+    }
+
+    pub async fn check_health(&self) -> Result<bool, String> {
+        let _operation = self.operation.lock().await;
+        if self.closing.load(Ordering::SeqCst) || !self.recovered.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if !self.is_running()? && system_proxy::recovery_pending()? {
+            system_proxy::restore()?;
+            *self.lifecycle_error.lock().map_err(|e| e.to_string())? =
+                "内核意外退出，已恢复原系统代理设置。请检查日志后重新开启。".into();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+/// Reaps the process normally; the Windows job also handles forced app exits.
+struct OwnedKernel {
+    child: Child,
+    #[cfg(windows)]
+    _job: std::os::windows::io::OwnedHandle,
+}
+
+impl OwnedKernel {
+    fn new(mut child: Child) -> Result<Self, String> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+            use windows_sys::Win32::System::JobObjects::*;
+            let attach = || -> Result<OwnedHandle, String> {
+                // Null security attributes create a non-inheritable handle.
+                let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+                if raw.is_null() {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                // The non-null handle is uniquely owned and closed by OwnedHandle.
+                let job = unsafe { OwnedHandle::from_raw_handle(raw) };
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
+                    unsafe { std::mem::zeroed() };
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if unsafe {
+                    SetInformationJobObject(
+                        job.as_raw_handle(),
+                        JobObjectExtendedLimitInformation,
+                        &limits as *const _ as *const _,
+                        std::mem::size_of_val(&limits) as u32,
+                    )
+                } == 0
+                {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) }
+                    == 0
+                {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                Ok(job)
+            };
+            match attach() {
+                Ok(job) => Ok(Self { child, _job: job }),
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    Err(format!("无法托管内核进程: {error}"))
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        Ok(Self { child })
+    }
+}
+
+impl std::ops::Deref for OwnedKernel {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.child
+    }
+}
+impl std::ops::DerefMut for OwnedKernel {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+}
+impl Drop for OwnedKernel {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }

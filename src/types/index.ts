@@ -1,5 +1,5 @@
 export interface Connection {
-  id: number;
+  id: string;
   host: string;
   ip: string;
   process: string;
@@ -10,6 +10,7 @@ export interface Connection {
 }
 
 export interface Rule {
+  raw?: string;
   type: string;
   payload: string;
   strategy: string;
@@ -33,6 +34,7 @@ export interface Subscription {
   url: string;
   count: number;
   updateTime: string;
+  status?: 'saved' | 'loading' | 'ready' | 'error';
 }
 
 export interface Proxy {

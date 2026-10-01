@@ -69,7 +69,7 @@ impl ClashConfig {
     pub fn default() -> Self {
         Self {
             mixed_port: Some(7890),
-            allow_lan: Some(true),
+            allow_lan: Some(false),
             mode: Some("rule".to_string()),
             log_level: Some("info".to_string()),
             external_controller: Some("127.0.0.1:9090".to_string()),
@@ -101,7 +101,7 @@ impl ClashConfig {
         if !file_path.exists() {
             println!("Config file not found, generating default...");
             let default_config = r#"mixed-port: 7890
-allow-lan: true
+allow-lan: false
 external-controller: 127.0.0.1:9090
 mode: rule
 log-level: info

@@ -1,87 +1,30 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
-import { Zap, BarChart3 } from 'lucide-vue-next';
+import { computed } from 'vue';
+import { ShieldCheck, ShieldOff } from 'lucide-vue-next';
 import { useProxyStore } from '../../stores/proxyStore';
-import { useThemeStore } from '../../stores/themeStore';
-
-const proxyStore = useProxyStore();
-const themeStore = useThemeStore();
-
-const toggleConnection = () => {
-  proxyStore.toggleConnection();
+import ProxyToggle from './ProxyToggle.vue';
+const store = useProxyStore();
+const pages: Record<string, { title: string; description: string }> = {
+  dashboard: { title: '网络概览', description: '连接状态与实时网络活动' },
+  groups: { title: '策略组', description: '选择流量出口，按需切换连接策略' },
+  proxies: { title: '订阅与节点', description: '管理订阅，发现可用的连接节点' },
+  connections: { title: '实时连接', description: '查看内核正在处理的网络请求' },
+  rules: { title: '分流规则', description: '按照规则顺序决定流量去向' },
+  logs: { title: '运行日志', description: '检查运行记录，定位连接问题' },
+  settings: { title: '偏好设置', description: '网络选项与个性化外观' },
 };
-
-// 格式化运行时长（秒 → HH:MM:SS）
-const formattedUptime = computed(() => {
-  const s = proxyStore.uptime;
-  if (!s || s <= 0) return '-';
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-});
-
-const getTabTitle = computed(() => {
-  switch (proxyStore.currentTab) {
-    case 'dashboard': return '欢迎回来';
-    case 'groups': return '策略组';
-    case 'proxies': return '代理节点';
-    case 'connections': return '实时连接';
-    case 'rules': return '分流规则';
-    case 'logs': return '运行日志';
-    case 'settings': return '系统设置';
-    default: return '';
-  }
-});
+const page = computed(() => pages[store.currentTab] || pages.dashboard);
 </script>
 
 <template>
-  <header class="h-20 bg-white/40 backdrop-blur-md flex items-center justify-between px-8 border-b border-white/20 shrink-0 z-10">
-    <div class="flex items-center space-x-4">
-      <h2 class="text-xl font-bold text-gray-800">
-        {{ getTabTitle }}
-      </h2>
-      <div v-if="proxyStore.currentTab === 'dashboard'" class="px-3 py-1 bg-white/60 rounded-full text-xs font-medium text-gray-500 border border-gray-100">
-        运行时间: {{ formattedUptime }}
-      </div>
-    </div>
-
-    <div class="flex items-center space-x-6">
-      <!-- Traffic Stats -->
-      <div class="hidden lg:flex items-center space-x-8">
-        <div class="flex items-center space-x-2">
-          <div class="p-2 bg-blue-50 rounded-lg">
-            <BarChart3 class="w-4 h-4 text-blue-500" />
-          </div>
-          <div>
-            <p class="text-[10px] text-gray-400 font-bold uppercase">下载</p>
-            <p class="text-sm font-bold text-gray-700">{{ proxyStore.trafficData.down }}</p>
-          </div>
-        </div>
-        <div class="flex items-center space-x-2">
-          <div class="p-2 bg-purple-50 rounded-lg">
-            <BarChart3 class="w-4 h-4 text-purple-500 rotate-180" />
-          </div>
-          <div>
-            <p class="text-[10px] text-gray-400 font-bold uppercase">上传</p>
-            <p class="text-sm font-bold text-gray-700">{{ proxyStore.trafficData.up }}</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Connection Toggle -->
-      <button 
-        @click="toggleConnection"
-        :class="[
-          'px-6 py-2.5 rounded-full font-bold text-sm shadow-lg transition-all duration-300 active:scale-95 flex items-center space-x-2',
-          proxyStore.isConnected 
-            ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-200' 
-            : (themeStore.getCurrentTheme()?.btn || 'bg-emerald-500') + ' text-white hover:opacity-90 ' + (themeStore.getCurrentTheme()?.shadow || 'shadow-emerald-200')
-        ]"
-      >
-        <Zap class="w-4 h-4" />
-        <span>{{ proxyStore.isConnected ? '断开连接' : '开启代理' }}</span>
-      </button>
+  <header class="page-header">
+    <div class="page-heading"><h1>{{ page.title }}</h1><p>{{ page.description }}</p></div>
+    <div class="header-actions">
+      <span v-if="store.currentTab === 'dashboard'" class="status-label" :class="{ enabled: store.systemProxyEnabled }">
+        <ShieldCheck v-if="store.systemProxyEnabled" :size="15" /><ShieldOff v-else :size="15" />
+        {{ store.systemProxyEnabled ? '系统代理已开启' : '系统代理未开启' }}
+      </span>
+      <ProxyToggle v-else />
     </div>
   </header>
 </template>

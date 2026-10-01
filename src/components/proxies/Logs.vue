@@ -17,7 +17,7 @@ const setFilter = (level: 'all' | 'INFO' | 'WARN' | 'ERROR') => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
+  <div class="h-full min-h-[300px] flex flex-col">
     <div class="flex items-center justify-between mb-4">
       <div class="flex space-x-2">
         <button
@@ -30,28 +30,28 @@ const setFilter = (level: 'all' | 'INFO' | 'WARN' | 'ERROR') => {
           :key="opt.key"
           @click="setFilter(opt.key as any)"
           :class="[
-            'px-3 py-1.5 rounded-xl text-xs font-bold transition-colors',
+            'px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors',
             logFilter === opt.key
               ? 'bg-gray-800 text-white'
-              : 'bg-white text-gray-400 hover:bg-gray-50'
+              : 'bg-white text-gray-500 hover:bg-gray-50'
           ]"
         >
           {{ opt.label }}
         </button>
       </div>
-      <button @click="proxyStore.logs = []" class="p-2 text-gray-400 hover:text-red-500">
+      <button @click="proxyStore.logs = []" aria-label="清空日志" class="p-2 text-gray-500 hover:text-red-500">
         <Trash2 class="w-5 h-5" />
       </button>
     </div>
 
-    <div class="flex-1 bg-gray-900 rounded-[2rem] p-6 font-mono text-xs overflow-y-auto custom-scrollbar shadow-inner">
+    <div class="flex-1 bg-gray-900 rounded-xl p-6 font-mono text-xs overflow-y-auto custom-scrollbar shadow-inner">
       <div v-if="filteredLogs.length === 0" class="flex items-center justify-center h-full text-gray-600">
         <p>{{ proxyStore.logs.length === 0 ? '等待日志...' : '没有匹配的日志' }}</p>
       </div>
       <div v-for="(log, i) in filteredLogs" :key="i" class="mb-2 flex space-x-4">
-        <span class="text-gray-600 shrink-0">{{ log.time }}</span>
+        <span class="text-gray-400 shrink-0">{{ log.time }}</span>
         <span :class="[
-          'font-bold shrink-0',
+          'font-semibold shrink-0',
           log.level === 'INFO' ? 'text-emerald-400' : log.level === 'WARN' ? 'text-amber-400' : log.level === 'DEBUG' ? 'text-blue-400' : 'text-red-400'
         ]">{{ log.level }}</span>
         <span class="text-gray-300 break-all">{{ log.msg }}</span>

@@ -1,697 +1,337 @@
 import { defineStore } from 'pinia';
 import type { Connection, Rule, Log, ProxyGroup, Subscription, Proxy, TrafficData } from '../types';
-import { getProxies, changeProxy, testProxy, getProviders, closeAllConnections, is_proxy_running } from '../services/proxy';
+import {
+  desktopInvoke, getProxies, changeProxy, testProxy, getProviders, closeAllConnections,
+  is_proxy_running, startCore, startProxy, stopProxy, getProxyStatus, isDesktop, getControllerConfig, webSocketUrl, getTunStatus,
+} from '../services/proxy';
+import { TelemetrySocket, runLimited } from '../services/telemetry';
 
-// 动态获取invoke函数
-const getInvoke = async () => {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    // 确保invoke是一个函数
-    if (typeof invoke === 'function') {
-      return invoke;
-    } else {
-      console.warn('Invoke is not a function, using mock');
-      return async (command: string, args?: any) => {
-        console.log(`模拟调用Tauri命令: ${command}`, args);
-        return Promise.resolve({});
-      };
-    }
-  } catch (e) {
-    console.warn('Tauri API not available, using mock');
-    return async (command: string, args?: any) => {
-      console.log(`模拟调用Tauri命令: ${command}`, args);
-      return Promise.resolve({});
-    };
-  }
-};
+let sockets: TelemetrySocket[] = [];
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let generation = 0;
+let subscriptionGeneration = 0;
+const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export const useProxyStore = defineStore('proxy', {
   state: () => ({
-    // 当前标签页
-    currentTab: 'dashboard' as string,
-    // 连接状态
+    currentTab: 'dashboard',
     isConnected: false,
-    // 选中的内核
+    systemProxyEnabled: false,
+    recoveryPending: false,
+    previewMode: false,
+    isBusy: false,
+    subscriptionBusy: false,
+    tunBusy: false,
+    initialized: false,
+    error: '',
     selectedKernel: 'Mihomo',
-    // 内核列表
     kernels: ['Mihomo'],
-    // 测试状态
     isTesting: false,
-    // TUN 模式
     tunMode: false,
-    // 连接列表
+    mixedPort: 7890,
+    allowLan: false,
     connections: [] as Connection[],
-    // 规则列表
     rules: [] as Rule[],
-    // 日志列表
     logs: [] as Log[],
-    // 代理组
     proxyGroups: [] as ProxyGroup[],
-    // 订阅列表
     subscriptions: [] as Subscription[],
-    // 代理节点
+    activeSubscription: '',
     proxies: [] as Proxy[],
-    // 流量数据
-    trafficData: {
-      up: '0 KB/s',
-      down: '0 KB/s'
-    } as TrafficData,
-    // 累计流量（字节）
-    trafficTotal: { up: 0, down: 0 } as { up: number, down: number },
-    // 运行时长（秒）
+    trafficData: { up: '0 B/s', down: '0 B/s' } as TrafficData,
+    trafficTotal: { up: 0, down: 0 },
     uptime: 0,
-    // API Polling interval
-    pollInterval: null as any,
-    ws: null as WebSocket | null,
-    logWs: null as WebSocket | null,
-    connWs: null as WebSocket | null
   }),
   actions: {
-    // 初始化应用
     async initialize() {
+      if (this.initialized) return;
+      this.initialized = true;
+      this.previewMode = !isDesktop();
+      if (this.previewMode) return;
+      this.isBusy = true;
       try {
-        console.log('Starting initialize...');
-        const invoke = await getInvoke();
-
-        if (typeof invoke === 'function') {
-          // 检查代理是否已经在运行
-          console.log('Calling is_proxy_running...');
-          const isRunning = await invoke('is_proxy_running');
-          console.log('is_proxy_running result:', isRunning);
-
-          if (isRunning) {
-            this.isConnected = true;
-            this.startPolling();
-            this.connectWebSocket();
-            this.connectLogWebSocket();
-            this.connectConnectionsWebSocket();
-            this.fetchRules();
-            this.fetchProviders();
-            this.fetchProxies();
-
-            // 获取 TUN 模式状态
-            try {
-              const tunStatus = await invoke('get_tun_status');
-              this.tunMode = tunStatus;
-            } catch (e) {
-              console.warn('Failed to get TUN status:', e);
-            }
-          }
-        } else {
-          console.error('Invoke function is not a function:', invoke);
-        }
-      } catch (err) {
-        console.error("Failed to initialize:", err);
-      }
-    },
-
-    // 切换连接状态
-    async toggleConnection() {
-      try {
-        const invoke = await getInvoke();
-        if (!this.isConnected) {
-          await invoke('start_proxy');
-          this.isConnected = true;
-          this.startPolling();
-          this.connectWebSocket();
-          this.connectLogWebSocket();
-          this.connectConnectionsWebSocket();
-          this.fetchRules();
-          this.fetchProviders(); // 获取订阅信息
-          this.fetchProxies(); // 获取代理节点
-        } else {
-          await invoke('stop_proxy');
-          this.isConnected = false;
-          this.stopPolling();
-          this.disconnectWebSocket();
-          this.disconnectLogWebSocket();
-          this.disconnectConnectionsWebSocket();
-          this.trafficData = { up: '0 KB/s', down: '0 KB/s' };
-          this.connections = [];
-          this.rules = [];
-        }
-      } catch (err) {
-        console.error("Failed to toggle connection:", err);
-        alert("操作失败: " + err);
-      }
-    },
-    
-    // 获取订阅信息
-    async fetchProviders() {
-      try {
-        console.log('开始获取订阅信息...');
-        
-        // 先尝试从 config.yaml 文件中读取订阅信息
-        try {
-          const invoke = await getInvoke();
-          const configData = await invoke('get_config');
-          console.log('从 config.yaml 获取的订阅信息:', configData);
-          
-          // 清空现有订阅
-          this.subscriptions = [];
-          
-          // 处理 config.yaml 中的订阅
-          if (configData['proxy-providers'] && typeof configData['proxy-providers'] === 'object') {
-            for (const name in configData['proxy-providers']) {
-              const provider = configData['proxy-providers'][name];
-              console.log('处理 config.yaml 中的订阅:', name, provider);
-              
-              // 跳过 'override'，它不是订阅，而是订阅的属性
-              if (name === 'override') {
-                continue;
-              }
-              
-              // 只有当 provider 有 url 属性时，才认为它是一个订阅
-              if (provider.url) {
-                const subscription: Subscription = {
-                  name: name,
-                  url: provider.url || '',
-                  count: 0, // 从 config.yaml 中无法获取节点数量，需要从 API 获取
-                  updateTime: new Date().toLocaleString().slice(0, 16)
-                };
-                this.subscriptions.push(subscription);
-              }
-            }
-          }
-          
-          console.log('从 config.yaml 获取的订阅列表:', this.subscriptions);
-        } catch (configErr) {
-          console.error("Failed to get config from file:", configErr);
-        }
-        
-        // 然后尝试从 API 获取订阅信息，更新节点数量
-        try {
-          const data = await getProviders();
-          console.log('从 API 获取到的订阅信息:', data);
-          
-          // 处理每个订阅，更新节点数量
-          if ((data as any).providers) {
-            const providersData = (data as any).providers;
-            for (const name in providersData) {
-              // 跳过 'override'，它不是订阅，而是订阅的属性
-              if (name === 'override') {
-                continue;
-              }
-              
-              const provider = providersData[name];
-              console.log('处理 API 订阅:', name, provider);
-              
-              // 查找现有的订阅
-              const existingSubscription = this.subscriptions.find(s => s.name === name);
-              if (existingSubscription) {
-                // 更新节点数量
-                existingSubscription.count = provider.proxies?.length || 0;
-              } else if (provider.vehicleType === 'HTTP') {
-                // 添加新的订阅
-                const subscription: Subscription = {
-                  name: name,
-                  url: provider.proxyProvider?.url || provider.url || '',
-                  count: provider.proxies?.length || 0,
-                  updateTime: new Date().toLocaleString().slice(0, 16)
-                };
-                this.subscriptions.push(subscription);
-              }
-            }
-          } else if (data && typeof data === 'object') {
-            // 直接处理数据，可能是 API 响应格式变化
-            for (const name in data) {
-              // 跳过 'override'，它不是订阅，而是订阅的属性
-              if (name === 'override') {
-                continue;
-              }
-              
-              const provider = (data as any)[name];
-              console.log('处理 API 订阅（直接）:', name, provider);
-              
-              // 查找现有的订阅
-              const existingSubscription = this.subscriptions.find(s => s.name === name);
-              if (existingSubscription) {
-                // 更新节点数量
-                existingSubscription.count = provider.proxies?.length || 0;
-              } else if (provider.vehicleType === 'HTTP') {
-                // 添加新的订阅
-                const subscription: Subscription = {
-                  name: name,
-                  url: provider.proxyProvider?.url || provider.url || '',
-                  count: provider.proxies?.length || 0,
-                  updateTime: new Date().toLocaleString().slice(0, 16)
-                };
-                this.subscriptions.push(subscription);
-              }
-            }
-          }
-        } catch (apiErr) {
-          console.error("Failed to fetch providers from API:", apiErr);
-          // API 调用失败，保留从 config.yaml 获取的订阅信息
-        }
-        
-        console.log('最终订阅列表:', this.subscriptions);
-      } catch (err) {
-        console.error("Failed to fetch providers:", err);
-        // 保留空订阅列表
-        this.subscriptions = [];
-        console.log('最终订阅列表（空）:', this.subscriptions);
-      }
-    },
-    async fetchRules() {
-      try {
-        const invoke = await getInvoke();
-        const data = await invoke('get_rules');
-        console.log('Fetch rules data:', data);
-        this.rules = ((data as any).rules || []).map((r: any) => ({
-          type: r.type || 'Unknown',
-          payload: r.payload || '',
-          strategy: r.proxy || ''
-        }));
-        console.log('Updated rules:', this.rules);
-      } catch (err) {
-        console.error("Failed to fetch rules:", err);
-        // 错误时清空数据
-        this.rules = [];
-      }
-    },
-    async connectConnectionsWebSocket() {
-      if (this.connWs || !this.isConnected) return;
-      
-      // 检查代理是否正在运行
-      try {
-        const isRunning = await is_proxy_running();
-        if (!isRunning) {
-          console.log('Proxy not running, skipping connections WebSocket connection');
-          return;
-        }
-      } catch (e) {
-        console.log('Cannot check proxy status, skipping connections WebSocket connection');
-        return;
-      }
-      
-      try {
-        this.connWs = new WebSocket('ws://127.0.0.1:9090/connections');
-        this.connWs.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            this.connections = (data.connections || []).map((c: any) => ({
-              id: c.id,
-              host: c.metadata.host || c.metadata.destinationIP,
-              ip: c.metadata.destinationIP,
-              process: c.metadata.processPath ? c.metadata.processPath.split('\\').pop().split('/').pop() : '',
-              rule: c.rule,
-              group: c.chains ? c.chains[0] : '',
-              speed: this.formatBytes(c.downloadSpeed || 0) + '/s',
-              time: new Date(c.start).toLocaleTimeString()
-            }));
-          } catch (e) {
-            // Silent error for WebSocket message parsing
-          }
-        };
-        this.connWs.onclose = () => {
-          this.connWs = null;
-          if (this.isConnected) {
-            setTimeout(() => this.connectConnectionsWebSocket(), 5000);
-          }
-        };
-        this.connWs.onerror = () => {
-          // Silent error - don't log to console
-          this.connWs = null;
-        };
+        await startCore();
+        await this.activateSession();
+        await this.refreshProxyStatus();
       } catch (error) {
-        this.connWs = null;
+        this.resetSession();
+        this.error = message(error);
+        await this.refreshProxyStatus().catch(() => {});
+      } finally {
+        this.isBusy = false;
       }
+      // Saved subscriptions remain editable even when startup fails.
+      await this.fetchProviders().catch(() => {});
+      await this.fetchRules().catch(() => {});
     },
-    disconnectConnectionsWebSocket() {
-      if (this.connWs) {
-        this.connWs.close();
-        this.connWs = null;
-      }
-    },
-    async connectLogWebSocket() {
-      if (this.logWs || !this.isConnected) return;
-      
-      // 检查代理是否正在运行
-      try {
-        const isRunning = await is_proxy_running();
-        if (!isRunning) {
-          console.log('Proxy not running, skipping log WebSocket connection');
-          return;
-        }
-      } catch (e) {
-        console.log('Cannot check proxy status, skipping log WebSocket connection');
-        return;
-      }
-      
-      try {
-        this.logWs = new WebSocket('ws://127.0.0.1:9090/logs?level=info');
-        this.logWs.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            this.logs.unshift({
-              time: new Date().toLocaleTimeString(),
-              level: data.type,
-              msg: data.payload
-            });
-            if (this.logs.length > 200) {
-              this.logs.pop();
-            }
-          } catch (e) {
-            // Silent error for WebSocket message parsing
-          }
-        };
-        this.logWs.onclose = () => {
-          this.logWs = null;
-          if (this.isConnected) {
-            setTimeout(() => this.connectLogWebSocket(), 5000);
-          }
-        };
-        this.logWs.onerror = () => {
-          // Silent error - don't log to console
-          this.logWs = null;
-        };
-      } catch (error) {
-        this.logWs = null;
-      }
-    },
-    disconnectLogWebSocket() {
-      if (this.logWs) {
-        this.logWs.close();
-        this.logWs = null;
-      }
-    },
-    async connectWebSocket() {
-      if (this.ws || !this.isConnected) return;
-      
-      // 检查代理是否正在运行
-      try {
-        const isRunning = await is_proxy_running();
-        if (!isRunning) {
-          console.log('Proxy not running, skipping traffic WebSocket connection');
-          return;
-        }
-      } catch (e) {
-        console.log('Cannot check proxy status, skipping traffic WebSocket connection');
-        return;
-      }
-      
-      try {
-        this.ws = new WebSocket('ws://127.0.0.1:9090/traffic');
-        this.ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            this.trafficData = {
-              up: this.formatBytes(data.up) + '/s',
-              down: this.formatBytes(data.down) + '/s'
+
+    async activateSession() {
+      this.stopPolling();
+      const config = await getControllerConfig();
+      this.isConnected = true;
+      this.trafficTotal = { up: 0, down: 0 };
+      let previous = new Map<string, { bytes: number; time: number }>();
+      sockets = [
+        new TelemetrySocket(webSocketUrl(config, '/traffic'), data => {
+          this.trafficData = { up: this.formatBytes(data.up) + '/s', down: this.formatBytes(data.down) + '/s' };
+        }),
+        new TelemetrySocket(webSocketUrl(config, '/logs?level=info'), data => {
+          this.logs.unshift({ time: new Date().toLocaleTimeString(), level: String(data.type).toUpperCase(), msg: String(data.payload) });
+          if (this.logs.length > 200) this.logs.length = 200;
+        }),
+        new TelemetrySocket(webSocketUrl(config, '/connections'), data => {
+          this.trafficTotal = { up: data.uploadTotal || 0, down: data.downloadTotal || 0 };
+          const now = Date.now();
+          const next = new Map<string, { bytes: number; time: number }>();
+          this.connections = (data.connections || []).map((c: any) => {
+            const last = previous.get(c.id);
+            const bytes = Number(c.download) || 0;
+            const speed = last && now > last.time ? Math.max(0, bytes - last.bytes) * 1000 / (now - last.time) : 0;
+            next.set(c.id, { bytes, time: now });
+            return {
+              id: c.id, host: c.metadata?.host || c.metadata?.destinationIP || '',
+              ip: c.metadata?.destinationIP || '',
+              process: (c.metadata?.processPath || '').split(/[\\/]/).pop(),
+              rule: c.rule, group: c.chains?.[0] || '', speed: this.formatBytes(speed) + '/s',
+              time: new Date(c.start).toLocaleTimeString(),
             };
-            // 累计流量
-            this.trafficTotal.up += data.up || 0;
-            this.trafficTotal.down += data.down || 0;
-          } catch (e) {
-            // Silent error for WebSocket message parsing
-          }
-        };
-        this.ws.onclose = () => {
-          this.ws = null;
-          if (this.isConnected) {
-            setTimeout(() => this.connectWebSocket(), 5000);
-          }
-        };
-        this.ws.onerror = () => {
-          // Silent error - don't log to console
-          this.ws = null;
-        };
-      } catch (error) {
-        this.ws = null;
-      }
+          });
+          previous = next;
+        }),
+      ];
+      await this.fetchProxies().catch(error => { this.error = message(error); });
+      this.tunMode = await getTunStatus().catch(() => false);
+      this.startPolling();
     },
-    disconnectWebSocket() {
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-      }
-    },
-    formatBytes(bytes: number) {
-      if (bytes === 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    },
-    startPolling() {
-      if (this.pollInterval) return;
-      this.pollInterval = setInterval(() => {
-        this.fetchProxies();
-        this.fetchUptime();
-      }, 2000);
-    },
-    stopPolling() {
-      if (this.pollInterval) {
-        clearInterval(this.pollInterval);
-        this.pollInterval = null;
-      }
-    },
-    async fetchProxies() {
+
+    async toggleConnection() {
+      if (this.isBusy || this.subscriptionBusy) return;
+      this.isBusy = true;
+      this.error = '';
       try {
-        const data = await getProxies();
-        console.log('Fetch proxies data:', data);
-        // 更新代理组和节点
-        const groups: ProxyGroup[] = [];
-        const nodes: Proxy[] = [];
-        
-        // 检查数据格式
-        if (data && typeof data === 'object') {
-          const proxiesData = (data as any).proxies;
-          if (proxiesData && typeof proxiesData === 'object') {
-            for (const key in proxiesData) {
-              const p = proxiesData[key];
-              if (p && typeof p === 'object') {
-                if (p.all && Array.isArray(p.all) && p.all.length > 0) {
-                  groups.push({
-                    name: p.name || key,
-                    type: p.type || 'Unknown',
-                    options: p.all,
-                    selected: p.now || ''
-                  });
-                } else if (p.type && p.type !== 'Selector' && p.type !== 'URLTest' && p.type !== 'Fallback' && p.type !== 'LoadBalance' && p.type !== 'Direct' && p.type !== 'Reject') {
-                  nodes.push({
-                    name: p.name || key,
-                    type: p.type,
-                    delay: p.history && Array.isArray(p.history) && p.history.length > 0 ? p.history[p.history.length - 1].delay : 0,
-                    region: p.name ? p.name.substring(0, 2) : ''
-                  });
-                }
-              }
-            }
+        if (this.systemProxyEnabled || this.recoveryPending || this.tunMode) {
+          await stopProxy();
+          this.resetSession();
+          this.systemProxyEnabled = false;
+          this.recoveryPending = false;
+        } else {
+          await startProxy();
+          await this.refreshProxyStatus();
+          if (!this.isConnected) await this.activateSession();
+          await this.fetchProviders();
+          await this.fetchRules();
+        }
+      } catch (error) {
+        this.error = message(error);
+        if (!await is_proxy_running().catch(() => false)) this.resetSession();
+        await this.refreshProxyStatus().catch(() => {});
+      } finally { this.isBusy = false; }
+    },
+
+    async refreshProxyStatus() {
+      const status = await getProxyStatus();
+      this.systemProxyEnabled = status.systemProxyEnabled;
+      this.recoveryPending = status.recoveryPending;
+      if (status.error) this.error = status.error;
+      return status;
+    },
+
+    resetSession() {
+      this.isConnected = false;
+      this.stopPolling();
+      this.uptime = 0;
+      this.tunMode = false;
+      this.trafficData = { up: '0 B/s', down: '0 B/s' };
+      this.trafficTotal = { up: 0, down: 0 };
+      this.connections = [];
+      this.proxyGroups = [];
+      this.proxies = [];
+      this.subscriptions.forEach(sub => { sub.status = 'saved'; sub.count = 0; });
+    },
+
+    startPolling() {
+      if (pollTimer) clearTimeout(pollTimer);
+      const current = generation;
+      const poll = async () => {
+        if (current !== generation || !this.isConnected) return;
+        try {
+          const status = await this.refreshProxyStatus();
+          if (current !== generation) return;
+          if (!status.kernelRunning) {
+            this.resetSession();
+            this.error = status.error || '内核已退出，请检查日志后重新开启代理';
+            return;
+          }
+          await Promise.all([this.fetchProxies(), this.fetchUptime()]);
+        } catch (error) {
+          if (current === generation) this.error = message(error);
+        } finally {
+          if (current === generation && this.isConnected) {
+            pollTimer = setTimeout(poll, document.hidden ? 15000 : 5000);
           }
         }
-        
-        this.proxyGroups = groups;
-        this.proxies = nodes;
-        console.log('Updated proxy groups:', groups);
-        console.log('Updated proxies:', nodes);
-      } catch (err) {
-        console.error("Fetch proxies error:", err);
-        // 错误时清空数据，避免显示旧数据
-        this.proxyGroups = [];
-        this.proxies = [];
-      }
+      };
+      pollTimer = setTimeout(poll, 1000);
     },
+
+    stopPolling() {
+      generation++;
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+      sockets.forEach(socket => socket.stop());
+      sockets = [];
+    },
+
+    async fetchProviders() {
+      const revision = subscriptionGeneration;
+      const config = await desktopInvoke<Record<string, any>>('get_config');
+      if (revision !== subscriptionGeneration) return;
+      this.mixedPort = Number(config['mixed-port']) || 0;
+      this.allowLan = config['allow-lan'] === true;
+      const saved = config['proxy-providers'] || {};
+      const runtime = this.isConnected ? await getProviders().catch(() => null) : null;
+      if (revision !== subscriptionGeneration) return;
+      this.activeSubscription = config['active-subscription'] || '';
+      this.subscriptions = Object.entries(saved).filter(([, p]: [string, any]) => p?.url).map(([name, value]) => {
+        const active = name === this.activeSubscription;
+        const provider = active ? runtime?.providers?.[name] : undefined;
+        const count = provider?.proxies?.length || 0;
+        return {
+          name, url: (value as any).url, count,
+          updateTime: provider?.updatedAt ? new Date(provider.updatedAt).toLocaleString() : '尚未更新',
+          status: count > 0 ? 'ready' : active && this.isConnected ? 'loading' : 'saved',
+        } as Subscription;
+      });
+    },
+
+    async fetchRules() {
+      const rules = await desktopInvoke<string[]>('get_rule_config');
+      this.rules = rules.map(raw => {
+        const [type, payload, strategy] = raw.split(',');
+        return { raw, type, payload: type === 'MATCH' ? '' : payload, strategy: type === 'MATCH' ? payload : strategy };
+      });
+    },
+
+    async fetchProxies() {
+      const current = generation;
+      const revision = subscriptionGeneration;
+      const data = await getProxies();
+      if (current !== generation || revision !== subscriptionGeneration || !this.isConnected) return;
+      const groups: ProxyGroup[] = [];
+      const nodes: Proxy[] = [];
+      for (const [name, proxy] of Object.entries(data.proxies || {})) {
+        if (Array.isArray(proxy.all)) {
+          groups.push({ name, type: proxy.type, options: proxy.all, selected: proxy.now || '' });
+        } else if (!['Direct', 'Reject', 'RejectDrop', 'Pass', 'Compatible'].includes(proxy.type)) {
+          nodes.push({ name, type: proxy.type, delay: proxy.history?.at(-1)?.delay || 0, region: name.slice(0, 2) });
+        }
+      }
+      this.proxyGroups = groups;
+      this.proxies = nodes;
+    },
+
     async switchProxy(groupName: string, proxyName: string) {
+      if (this.subscriptionBusy) throw new Error('正在切换订阅，请稍后选择节点');
       try {
         await changeProxy(groupName, proxyName);
-        // fetchProxies(); // will be updated by polling
-        const group = this.proxyGroups.find(g => g.name === groupName);
-        if (group) {
-          group.selected = proxyName;
-        }
-      } catch (err) {
-        console.error("Failed to switch proxy:", err);
+        const group = this.proxyGroups.find(group => group.name === groupName);
+        if (group) group.selected = proxyName;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
       }
     },
 
-    // 测试延迟
     async testLatency() {
+      if (this.isTesting || this.subscriptionBusy || !this.isConnected) return;
       this.isTesting = true;
+      const current = generation;
+      const revision = subscriptionGeneration;
       try {
-        const promises = this.proxies.map(async (p) => {
-          try {
-            const delay = await testProxy(p.name);
-            p.delay = delay;
-          } catch (err) {
-            console.error("Test proxy error:", err);
-            p.delay = -1;
-          }
+        await runLimited<string>(this.proxies.map(p => p.name), 6, async name => {
+          if (current !== generation || revision !== subscriptionGeneration) return;
+          const delay = await testProxy(name).catch(() => -1);
+          if (current !== generation || revision !== subscriptionGeneration) return;
+          const proxy = this.proxies.find(p => p.name === name);
+          if (proxy) proxy.delay = delay;
         });
-        await Promise.all(promises);
-      } catch (err) {
-        console.error("Test latency error:", err);
-      } finally {
-        this.isTesting = false;
-      }
+      } finally { this.isTesting = false; }
     },
-    // 添加订阅
-    async addSubscription(name: string, url: string) {
-      if (!url || !name) return;
+
+    async saveSubscription(command: string, args: Record<string, unknown>, name?: string, start = false) {
+      if (this.subscriptionBusy || this.isBusy) throw new Error('请等待当前操作完成');
+      this.subscriptionBusy = true;
+      subscriptionGeneration++;
+      this.error = '';
       try {
-        const invoke = await getInvoke();
-        await invoke('add_proxy_provider', { name, url });
-        
-        const existing = this.subscriptions.find(s => s.name === name);
-        if (existing) {
-          existing.updateTime = new Date().toLocaleString().slice(0, 16);
-        } else {
-          this.subscriptions.push({
-            name,
-            url,
-            count: 0,
-            updateTime: new Date().toLocaleString().slice(0, 16)
-          });
-        }
-        if (this.isConnected) {
-          await invoke('stop_proxy');
-          await invoke('start_proxy');
-        }
-        alert('订阅已添加并写入 config.yaml');
-      } catch (err) {
-        console.error("Failed to add subscription:", err);
-        alert("订阅添加失败: " + err);
-      }
-    },
-    
-    // 更新订阅
-    async updateSubscription(oldName: string, newName: string, url: string) {
-      if (!url || !newName) return;
-      try {
-        const invoke = await getInvoke();
-        await invoke('update_proxy_provider', { oldName, newName, url });
-        
-        const existing = this.subscriptions.find(s => s.name === oldName);
-        if (existing) {
-          existing.name = newName;
-          existing.url = url;
-          existing.updateTime = new Date().toLocaleString().slice(0, 16);
-        }
-        if (this.isConnected) {
-          await invoke('stop_proxy');
-          await invoke('start_proxy');
-        }
-        alert('订阅已更新并写入 config.yaml');
-      } catch (err) {
-        console.error("Failed to update subscription:", err);
-        alert("订阅更新失败: " + err);
-      }
-    },
-    
-    // 导入订阅
-    async importSubscription(name: string, url: string) {
-      if (!url || !name) return;
-      try {
-        console.log('开始导入订阅:', name, url);
-        const invoke = await getInvoke();
-        
-        // 首先添加订阅到配置文件
-        console.log('调用add_proxy_provider...');
-        await invoke('add_proxy_provider', { name, url });
-        console.log('add_proxy_provider调用成功');
-        
-        // 确保代理已启动
-        if (!this.isConnected) {
-          console.log('代理未连接，启动代理...');
-          await invoke('start_proxy');
-          this.isConnected = true;
-          this.startPolling();
-          this.connectWebSocket();
-          this.connectLogWebSocket();
-          this.connectConnectionsWebSocket();
-          console.log('代理已启动');
-        } else {
-          console.log('代理已连接，重启代理...');
-          await invoke('stop_proxy');
-          console.log('代理已停止');
-          await invoke('start_proxy');
-          console.log('代理已启动');
-        }
-        
-        // 获取订阅信息
-        console.log('获取订阅信息...');
+        await desktopInvoke<void>(command, args);
         await this.fetchProviders();
-        console.log('获取订阅信息完成');
-        
-        // 获取节点信息
-        console.log('获取节点信息...');
-        await this.fetchProxies();
-        console.log('获取节点信息完成');
-        
-        console.log('当前订阅列表:', this.subscriptions);
-        console.log('当前节点列表:', this.proxies);
-        
-        // 检查订阅是否真的添加成功
-        const subscriptionExists = this.subscriptions.some(s => s.name === name);
-        if (subscriptionExists) {
-          alert('订阅已导入并加载成功');
-        } else {
-          alert('订阅已添加到配置文件，但可能需要一些时间来下载和解析。请稍后刷新页面查看。');
+        if (start && name === this.activeSubscription && !this.isConnected) {
+          await startCore();
+          await this.activateSession();
         }
-      } catch (err) {
-        console.error("Failed to import subscription:", err);
-        alert("订阅导入失败: " + err);
-        throw err;
-      }
-    },
-    
-    // 删除订阅
-    async removeSubscription(name: string) {
-      try {
-        const invoke = await getInvoke();
-        await invoke('remove_proxy_provider', { name });
-        this.subscriptions = this.subscriptions.filter(s => s.name !== name);
+        await this.fetchProviders();
         if (this.isConnected) {
-          await invoke('stop_proxy');
-          await invoke('start_proxy');
+          await this.fetchProxies();
+          if (name && name === this.activeSubscription) {
+            const deadline = Date.now() + 6000;
+            while (!this.subscriptions.some(s => s.name === name && s.status === 'ready') && Date.now() < deadline) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await this.fetchProviders();
+            }
+            const subscription = this.subscriptions.find(s => s.name === name);
+            if (subscription && subscription.status !== 'ready') {
+              subscription.status = 'error';
+              this.error = '订阅已保存，但内核尚未返回节点。请检查链接与订阅格式后重试。';
+            }
+          }
         }
-        alert('订阅已删除并更新 config.yaml');
-      } catch (err) {
-        console.error("Failed to remove subscription:", err);
-        alert("订阅删除失败: " + err);
-      }
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally { this.subscriptionBusy = false; }
     },
-    // 切换 TUN 模式（乐观更新，失败回滚）
+
+    addSubscription(name: string, url: string) {
+      return this.saveSubscription('add_proxy_provider', { name, url }, name);
+    },
+    importSubscription(name: string, url: string) {
+      return this.saveSubscription('add_proxy_provider', { name, url }, name, true);
+    },
+    updateSubscription(oldName: string, newName: string, url: string) {
+      return this.saveSubscription('update_proxy_provider', { oldName, newName, url }, newName);
+    },
+    removeSubscription(name: string) {
+      return this.saveSubscription('remove_proxy_provider', { name });
+    },
+    switchSubscription(name: string) {
+      if (name === this.activeSubscription) return Promise.resolve();
+      return this.saveSubscription('set_active_subscription', { name }, name, true);
+    },
+
     async toggleTunMode() {
-      const prevState = this.tunMode;
-      this.tunMode = !this.tunMode;
+      if (this.tunBusy || !this.isConnected) return;
+      this.tunBusy = true;
       try {
-        const invoke = await getInvoke();
-        await invoke('toggle_tun', { enabled: this.tunMode });
-      } catch (err) {
-        console.error("Failed to toggle TUN mode:", err);
-        this.tunMode = prevState;
-      }
+        await desktopInvoke<void>('toggle_tun', { enabled: !this.tunMode });
+        this.tunMode = await getTunStatus();
+      } catch (error) { this.error = message(error); }
+      finally { this.tunBusy = false; }
     },
-    // 切换内核
-    setKernel(kernel: string) {
-      this.selectedKernel = kernel;
-    },
-    // 切换标签页
-    setCurrentTab(tab: string) {
-      this.currentTab = tab;
-    },
-    // 获取运行时长
+    setKernel(kernel: string) { this.selectedKernel = kernel; },
+    setCurrentTab(tab: string) { this.currentTab = tab; },
     async fetchUptime() {
-      try {
-        const invoke = await getInvoke();
-        const uptime = await invoke<number>('get_uptime');
-        if (typeof uptime === 'number' && uptime > 0) {
-          this.uptime = uptime;
-        }
-      } catch {
-        // 静默失败
-      }
+      const current = generation;
+      const uptime = await desktopInvoke<number>('get_uptime');
+      if (current === generation) this.uptime = uptime;
     },
-    // 关闭所有连接
     async closeAllConnections() {
-      try {
-        await closeAllConnections();
-        this.connections = [];
-      } catch (err) {
-        console.error("Failed to close all connections:", err);
-      }
-    }
-  }
+      try { await closeAllConnections(); this.connections = []; }
+      catch (error) { this.error = message(error); }
+    },
+    formatBytes(bytes: number) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4);
+      return (bytes / Math.pow(1024, index)).toFixed(2) + ' ' + ['B', 'KB', 'MB', 'GB', 'TB'][index];
+    },
+  },
 });

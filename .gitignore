@@ -29,6 +29,19 @@ docs/
 */config.yaml
 configs/mihomo/config.yaml
 
+# Private runtime data (also ignore copies outside the standard config directory)
+**/configs/
+**/runtime.yaml
+**/system-proxy-recovery.json
+**/proxies_debug.json
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+
 # Demo
 demo/
 

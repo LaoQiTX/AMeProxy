@@ -1,213 +1,98 @@
 <script setup lang="ts">
-import { Shield, Activity, Cpu, RefreshCw, Wifi, Palette, ArrowUp, ArrowDown, ChevronDown, ChevronUp } from 'lucide-vue-next';
-import { useProxyStore } from '../../stores/proxyStore';
-import { useThemeStore } from '../../stores/themeStore';
 import { computed, ref } from 'vue';
-
-const proxyStore = useProxyStore();
-const themeStore = useThemeStore();
-
-const showNodeSelector = ref(false);
-
-// 格式化流量字节
-const formatBytes = (bytes: number) => {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
-
-// 累计流量（本连接会话）
-const totalDown = computed(() => formatBytes(proxyStore.trafficTotal.down));
-const totalUp = computed(() => formatBytes(proxyStore.trafficTotal.up));
-
-// 获取当前代理组（优先应用自定义的"默认"组，而非 mihomo 内置的 GLOBAL）
-// GLOBAL 只包含策略组级别的选项，而"默认"组包含所有订阅节点
-const defaultGroup = computed(() => {
-  return proxyStore.proxyGroups.find(g => g.name === '默认') ||
-         proxyStore.proxyGroups.find(g => g.name === 'GLOBAL') ||
-         proxyStore.proxyGroups[0];
+import { ArrowDown, ArrowUp, ArrowRight, Activity, Clock3, Globe2, Layers, RefreshCw, Network, Monitor, Server, Check } from 'lucide-vue-next';
+import { useProxyStore } from '../../stores/proxyStore';
+import ProxyToggle from '../common/ProxyToggle.vue';
+const store = useProxyStore();
+const switching = ref(false);
+const defaultGroup = computed(() => store.proxyGroups.find(g => g.name === '默认') || store.proxyGroups.find(g => g.type === 'Selector' && g.name !== 'GLOBAL') || store.proxyGroups.find(g => g.name === 'GLOBAL') || store.proxyGroups[0]);
+const selected = computed(() => defaultGroup.value?.selected || '');
+const currentProxy = computed(() => store.proxies.find(p => p.name === selected.value));
+const direct = computed(() => ['DIRECT', '直连'].includes(selected.value));
+const uptime = computed(() => {
+  if (!store.isConnected) return '—';
+  const s = store.uptime;
+  return [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(n => String(n).padStart(2, '0')).join(':');
 });
-
-const currentProxy = computed(() => {
-  const selected = defaultGroup.value?.selected;
-  return proxyStore.proxies.find(p => p.name === selected) || { name: selected || '未连接', type: '-', delay: 0 };
-});
-
-// 只显示当前组可选节点（过滤掉内置类型和不在当前组中的节点）
-const availableNodes = computed(() => {
-  const groupOptions = defaultGroup.value?.options || [];
-  return proxyStore.proxies.filter(p => groupOptions.includes(p.name));
-});
-
-// 获取节点的延迟信息
-const getNodeDelay = (nodeName: string): number => {
-  const proxy = proxyStore.proxies.find(p => p.name === nodeName);
-  return proxy?.delay || 0;
-};
-
-// 提取地区名称，如 "日本|01" 从 "订阅名-日本|01" 或 "日本|01-xxx"
-const extractRegion = (name: string): string => {
-  if (!name || name === '未连接') return '未连';
-
-  // 去除 [provider] 前缀，如 [mj]日本-优化2  →  日本-优化2
-  const cleanName = name.replace(/^\[.*?\]/, '');
-
-  // 提取中文或英文地区名（第一个连续词）
-  const regionMatch = cleanName.match(/^([一-龥A-Za-z]+)/);
-  if (regionMatch) {
-    return regionMatch[1];
-  }
-
-  return cleanName.substring(0, 4) || name.substring(0, 4);
-};
-const currentDelay = computed(() => {
-  if (currentProxy.value.delay > 0) return currentProxy.value.delay + ' ms';
-  if (currentProxy.value.delay === -1) return 'Timeout';
-  return '- ms';
-});
-
-const selectNode = async (nodeName: string) => {
-  try {
-    const groupName = defaultGroup.value?.name || 'GLOBAL';
-    await proxyStore.switchProxy(groupName, nodeName);
-    showNodeSelector.value = false;
-  } catch (error) {
-    console.error('Failed to select node:', error);
-  }
-};
-
+const delay = computed(() => !currentProxy.value?.delay ? '尚未测速' : currentProxy.value.delay < 0 ? '连接超时' : currentProxy.value.delay + ' ms');
+async function selectNode(event: Event) {
+  const group = defaultGroup.value;
+  if (!group || switching.value) return;
+  const target = event.target as HTMLSelectElement;
+  switching.value = true;
+  try { await store.switchProxy(group.name, target.value); }
+  catch { target.value = group.selected; }
+  finally { switching.value = false; }
+}
+async function selectSubscription(event: Event) {
+  const target = event.target as HTMLSelectElement;
+  try { await store.switchSubscription(target.value); }
+  catch { target.value = store.activeSubscription; }
+}
 </script>
 
 <template>
-  <div class="space-y-8">
-    <!-- Stats Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <div class="bg-white rounded-3xl p-6 shadow-sm border border-gray-50 flex items-center space-x-4">
-        <div class="p-4 bg-emerald-50 rounded-2xl">
-          <Shield class="w-8 h-8 text-emerald-500" />
+  <div class="dashboard">
+    <section class="connection-panel" :class="{ 'is-active': store.systemProxyEnabled }" aria-labelledby="connection-title">
+      <div class="connection-main">
+        <div class="connection-copy">
+          <span class="eyebrow"><i class="status-dot" :class="{ online: store.systemProxyEnabled }"></i> SYSTEM PROXY</span>
+          <h2 id="connection-title">{{ store.systemProxyEnabled ? '代理已开启' : store.tunMode ? 'TUN 已开启' : '准备好，连接世界' }}</h2>
+          <p>{{ store.systemProxyEnabled ? '系统代理已指向本地内核，遵循系统设置的应用将按规则转发。' : store.tunMode ? '虚拟网卡正在运行，关闭代理将同时停止内核与 TUN。' : '一键启动内核并设置系统代理，无需手动配置浏览器。' }}</p>
+          <div class="connection-actions"><ProxyToggle /><span>{{ store.systemProxyEnabled ? '关闭时恢复原系统设置' : 'Windows 系统代理' }}</span></div>
         </div>
-        <div>
-          <p class="text-sm text-gray-400 font-medium">代理状态</p>
-          <p class="text-xl font-bold text-gray-800">{{ proxyStore.isConnected ? '已开启' : '未开启' }}</p>
-        </div>
-      </div>
-      <div class="bg-white rounded-3xl p-6 shadow-sm border border-gray-50 flex items-center space-x-4">
-        <div class="p-4 bg-blue-50 rounded-2xl">
-          <ArrowDown class="w-8 h-8 text-blue-500" />
-        </div>
-        <div>
-          <p class="text-sm text-gray-400 font-medium">下载速度</p>
-          <p class="text-xl font-bold text-gray-800">{{ proxyStore.trafficData.down }}</p>
+        <div class="connection-visual" aria-hidden="true">
+          <div class="orbit orbit-outer"></div><div class="orbit orbit-inner"></div>
+          <div class="network-symbol"><Network :size="38" :stroke-width="1.5" /></div>
+          <span class="orbit-node node-a"></span><span class="orbit-node node-b"></span>
         </div>
       </div>
-      <div class="bg-white rounded-3xl p-6 shadow-sm border border-gray-50 flex items-center space-x-4">
-        <div class="p-4 bg-amber-50 rounded-2xl">
-          <ArrowUp class="w-8 h-8 text-amber-500" />
-        </div>
-        <div>
-          <p class="text-sm text-gray-400 font-medium">上传速度</p>
-          <p class="text-xl font-bold text-gray-800">{{ proxyStore.trafficData.up }}</p>
-        </div>
+      <div class="connection-path">
+        <span><Monitor :size="14" />本机应用</span><span class="path-line"></span>
+        <span :class="{ 'accent-text': store.systemProxyEnabled }"><Check v-if="store.systemProxyEnabled" :size="14" /><Server v-else :size="14" />系统代理</span><span class="path-line"></span>
+        <span><Globe2 :size="14" />{{ direct ? '直连出口' : '按规则分流' }}</span>
       </div>
+    </section>
+
+    <div class="overview-grid">
+      <section class="panel node-panel">
+        <div class="section-heading"><h2><Layers :size="17" />当前策略</h2><button class="text-button" @click="store.setCurrentTab('groups')">管理策略<ArrowRight :size="14" /></button></div>
+        <div v-if="store.subscriptions.length" class="mb-4">
+          <label for="active-subscription" class="micro-label">当前订阅{{ store.subscriptionBusy ? ' · 处理中…' : '' }}</label>
+          <select id="active-subscription" class="node-select" :value="store.activeSubscription" @change="selectSubscription" :disabled="store.subscriptionBusy || store.isBusy">
+            <option v-for="sub in store.subscriptions" :key="sub.name" :value="sub.name">{{ sub.name }}</option>
+          </select>
+          <p v-if="store.subscriptions.length > 1" class="micro-label mt-2">仅使用选中订阅；切换会断开旧连接。</p>
+        </div>
+        <template v-if="defaultGroup">
+          <div class="node-summary"><span class="node-avatar"><Globe2 :size="23" /></span><div><p class="micro-label">{{ defaultGroup.name }}</p><h3>{{ selected || '尚未选择节点' }}</h3></div></div>
+          <label for="active-node" class="micro-label">切换出口节点</label>
+          <select id="active-node" class="node-select" :value="selected" @change="selectNode" :disabled="switching || store.subscriptionBusy || defaultGroup.type !== 'Selector' || !store.isConnected">
+            <option v-for="name in defaultGroup.options" :key="name" :value="name">{{ name }}</option>
+          </select>
+          <div class="node-meta"><span>{{ direct ? 'DIRECT · 直接连接' : (currentProxy?.type || defaultGroup.type) }}</span><button class="text-button" @click="store.testLatency()" :disabled="store.isTesting || !store.proxies.length"><RefreshCw :size="13" :class="{ 'animate-spin': store.isTesting }" />{{ store.isTesting ? '测速中' : delay }}</button></div>
+          <p v-if="direct" class="inline-hint">当前出口为直连。选择订阅节点后，匹配代理规则的流量才会经过远程节点。</p>
+        </template>
+        <div v-else class="empty-node">
+          <div class="empty-symbol"><Globe2 :size="26" :stroke-width="1.5" /></div>
+          <h3>{{ store.subscriptions.length ? '启动后加载节点' : '从一个订阅开始' }}</h3>
+          <p>导入 Clash YAML 订阅，再选择你的连接节点。</p>
+          <button class="secondary-button" @click="store.setCurrentTab('proxies')">{{ store.subscriptions.length ? '查看订阅' : '添加订阅' }}<ArrowRight :size="14" /></button>
+        </div>
+      </section>
+
+      <section class="panel traffic-panel">
+        <div class="section-heading"><h2><Activity :size="17" />实时流量</h2><span class="micro-label">内核统计</span></div>
+        <div class="traffic-row"><span class="traffic-icon"><ArrowDown :size="19" /></span><div><span class="micro-label">下载速度</span><strong>{{ store.trafficData.down }}</strong></div><span class="traffic-total">累计 {{ store.formatBytes(store.trafficTotal.down) }}</span></div>
+        <div class="traffic-row"><span class="traffic-icon upload"><ArrowUp :size="19" /></span><div><span class="micro-label">上传速度</span><strong>{{ store.trafficData.up }}</strong></div><span class="traffic-total">累计 {{ store.formatBytes(store.trafficTotal.up) }}</span></div>
+        <div class="session-meta"><span><Clock3 :size="14" />内核运行时长</span><strong>{{ uptime }}</strong></div>
+      </section>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div class="lg:col-span-2 bg-white rounded-[2rem] p-8 shadow-sm border border-gray-50 relative">
-        <div class="relative z-10">
-          <div class="flex items-center justify-between mb-8">
-            <h3 class="text-lg font-bold text-gray-800">当前连接节点 ({{ defaultGroup?.name || '未选择' }})</h3>
-            <button @click="proxyStore.testLatency()" class="p-2 hover:bg-gray-50 rounded-xl transition-colors">
-              <RefreshCw :class="['w-5 h-5 text-gray-400', proxyStore.isTesting ? 'animate-spin' : '']" />
-            </button>
-          </div>
-          
-          <div class="flex items-center space-x-6">
-            <div class="w-20 h-20 bg-gray-50 rounded-3xl flex items-center justify-center text-3xl font-bold text-gray-300">
-              {{ extractRegion(currentProxy.name).substring(0, 2) }}
-            </div>
-            <div class="relative">
-              <div @click="showNodeSelector = !showNodeSelector" class="flex items-center justify-between cursor-pointer">
-                <div>
-                  <h4 class="text-2xl font-black text-gray-800">{{ extractRegion(currentProxy.name) }}</h4>
-                  <div class="flex items-center space-x-3 mt-2">
-                    <span class="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[10px] font-bold rounded uppercase">{{ currentProxy.type }}</span>
-                    <span class="flex items-center text-emerald-500 text-sm font-bold">
-                      <Wifi class="w-4 h-4 mr-1" /> {{ currentDelay }}
-                    </span>
-                  </div>
-                </div>
-                <div class="ml-4">
-                  <ChevronDown v-if="!showNodeSelector" class="w-5 h-5 text-gray-400" />
-                  <ChevronUp v-else class="w-5 h-5 text-gray-400" />
-                </div>
-              </div>
-              <div v-if="showNodeSelector" class="absolute top-full left-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-100 z-10 max-h-80 overflow-y-auto">
-                <div class="p-2">
-                  <!-- 无节点提示 -->
-                  <div v-if="availableNodes.length === 0" class="px-4 py-8 text-center text-gray-400">
-                    <p class="text-sm">暂无可用节点</p>
-                    <p class="text-xs mt-1">请确保代理已连接</p>
-                  </div>
-                  <div 
-                    v-for="proxy in availableNodes" 
-                    :key="proxy.name"
-                    @click="selectNode(proxy.name)"
-                    class="px-4 py-2 rounded-lg hover:bg-gray-50 cursor-pointer flex items-center justify-between"
-                  >
-                    <div class="flex items-center space-x-2">
-                      <span class="w-6 h-6 bg-gray-100 rounded flex items-center justify-center text-xs font-bold">
-                        {{ extractRegion(proxy.name).substring(0, 2) }}
-                      </span>
-                      <span class="text-sm font-medium">{{ extractRegion(proxy.name) }}</span>
-                    </div>
-                    <div class="flex items-center space-x-2">
-                      <span :class="['text-xs font-bold', proxy.delay === -1 ? 'text-gray-400' : proxy.delay < 100 ? 'text-emerald-500' : 'text-amber-500']">
-                        {{ proxy.delay > 0 ? proxy.delay + 'ms' : proxy.delay === -1 ? '超时' : '-' }}
-                      </span>
-                      <span v-if="defaultGroup?.selected === proxy.name" class="text-xs font-bold text-emerald-500">已选</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-12 grid grid-cols-2 gap-4">
-            <div class="bg-gray-50/50 rounded-2xl p-4">
-              <p class="text-xs text-gray-400 font-bold uppercase mb-1">下载总量</p>
-              <p class="text-lg font-bold text-gray-700">{{ proxyStore.isConnected ? totalDown : '-' }}</p>
-            </div>
-            <div class="bg-gray-50/50 rounded-2xl p-4">
-              <p class="text-xs text-gray-400 font-bold uppercase mb-1">上传总量</p>
-              <p class="text-lg font-bold text-gray-700">{{ proxyStore.isConnected ? totalUp : '-' }}</p>
-            </div>
-          </div>
-        </div>
-        <div :class="['absolute -bottom-12 -right-12 w-64 h-64 rounded-full opacity-10 blur-3xl', themeStore.getCurrentTheme()?.text.replace('text', 'bg')]"></div>
-      </div>
-
-      <div class="bg-white rounded-[2rem] p-8 shadow-sm border border-gray-50">
-        <h3 class="text-lg font-bold text-gray-800 mb-6 flex items-center">
-          <Palette class="w-5 h-5 mr-2 text-gray-400" />
-          个性化配色
-        </h3>
-        <div class="grid grid-cols-2 gap-4">
-          <button 
-            v-for="theme in themeStore.themes" 
-            :key="theme.id"
-            @click="themeStore.setTheme(theme.id)"
-            :class="[
-              'p-4 rounded-2xl border-2 transition-all duration-300 text-left group',
-              themeStore.currentTheme === theme.id ? 'border-gray-800 bg-gray-50' : 'border-transparent bg-gray-50/50 hover:bg-gray-50'
-            ]"
-          >
-            <div :style="{ backgroundColor: theme.color }" class="w-8 h-8 rounded-lg mb-3 shadow-sm group-hover:scale-110 transition-transform"></div>
-            <p class="text-sm font-bold text-gray-700">{{ theme.name }}</p>
-          </button>
-        </div>
-      </div>
-    </div>
+    <button class="activity-strip" @click="store.setCurrentTab('connections')">
+      <span class="activity-icon"><Activity :size="18" /></span>
+      <span><strong>{{ store.connections.length }} 个活跃连接</strong><small>查看应用请求、命中规则与流量去向</small></span>
+      <ArrowRight :size="18" />
+    </button>
   </div>
 </template>

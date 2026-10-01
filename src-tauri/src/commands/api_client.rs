@@ -1,97 +1,169 @@
-//! Mihomo API 客户端模块
-//!
-//! 封装与 Mihomo REST API (127.0.0.1:9090) 的 HTTP 通信。
-//! 使用 reqwest 替代原始 TcpStream 手动组装 HTTP 请求。
+//! Shared, bounded, authenticated access to the local mihomo controller.
+use reqwest::{Client, Method};
+use serde::{de::DeserializeOwned, Serialize};
+use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 
-use reqwest::Client;
-use serde::de::DeserializeOwned;
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerConfig {
+    pub ws_url: String,
+    pub secret: String,
+    #[serde(skip)]
+    pub address: SocketAddr,
+}
 
-/// Mihomo REST API 基础地址
-const MIHOMO_API_BASE: &str = "http://127.0.0.1:9090";
+impl ControllerConfig {
+    pub fn from_yaml(yaml: &serde_yaml::Value) -> Result<Self, String> {
+        let address = yaml["external-controller"]
+            .as_str()
+            .unwrap_or("127.0.0.1:9090")
+            .parse::<SocketAddr>()
+            .map_err(|_| "控制接口必须使用回环 IP 和端口".to_string())?;
+        if !address.ip().is_loopback() || address.port() == 0 {
+            return Err("控制接口必须绑定有效的回环地址，例如 127.0.0.1:9090".into());
+        }
+        Ok(Self {
+            ws_url: format!("ws://{}", address),
+            secret: yaml["secret"].as_str().unwrap_or_default().to_owned(),
+            address,
+        })
+    }
 
-/// API 客户端，封装与 Mihomo 内核的 HTTP 通信
+    pub fn load() -> Result<Self, String> {
+        let content = std::fs::read_to_string(crate::proxy::paths::get_config_path()?)
+            .map_err(|e| e.to_string())?;
+        Self::from_yaml(&serde_yaml::from_str(&content).map_err(|e| e.to_string())?)
+    }
+}
+
 pub struct ApiClient {
     client: Client,
-    base_url: String,
+    pub config: ControllerConfig,
 }
 
 impl ApiClient {
-    /// 创建新的 API 客户端实例
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-            base_url: MIHOMO_API_BASE.to_string(),
-        }
+    pub fn new() -> Result<Self, String> {
+        Self::with_config(ControllerConfig::load()?)
     }
 
-    /// 获取基础 URL
-    #[allow(dead_code)]
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    pub fn with_config(config: ControllerConfig) -> Result<Self, String> {
+        static CLIENT: OnceLock<Client> = OnceLock::new();
+        let client = match CLIENT.get() {
+            Some(client) => client.clone(),
+            None => {
+                let client = Client::builder()
+                    .no_proxy()
+                    .connect_timeout(Duration::from_secs(2))
+                    .timeout(Duration::from_secs(15))
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let _ = CLIENT.set(client.clone());
+                client
+            }
+        };
+        Ok(Self { client, config })
     }
 
-    /// 发送 GET 请求并返回纯文本响应体
-    pub async fn get_text(&self, path: &str) -> Result<String, String> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<reqwest::Response, String> {
+        let mut request = self
             .client
-            .get(&url)
+            .request(method, format!("http://{}{}", self.config.address, path));
+        if !self.config.secret.is_empty() {
+            request = request.bearer_auth(&self.config.secret);
+        }
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request
             .send()
             .await
-            .map_err(|e| format!("API request failed: {}", e))?;
-
+            .map_err(|e| format!("内核请求失败: {}", e.without_url()))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error ({}): {}", status, body));
+            return Err(format!("内核接口错误 ({}): {}", status, body));
         }
+        Ok(response)
+    }
 
-        response
+    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        self.request(Method::GET, path, None)
+            .await?
+            .json()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn get_text(&self, path: &str) -> Result<String, String> {
+        self.request(Method::GET, path, None)
+            .await?
             .text()
             .await
-            .map_err(|e| format!("Failed to read response: {}", e))
+            .map_err(|e| e.to_string())
     }
 
-    /// 发送 GET 请求并解析 JSON 响应
-    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("API request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error ({}): {}", status, body));
-        }
-
-        response
-            .json::<T>()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    /// 发送 PUT 请求，附带 JSON body
     pub async fn put_json(&self, path: &str, body: &serde_json::Value) -> Result<(), String> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = self
-            .client
-            .put(&url)
-            .header("Content-Type", "application/json")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| format!("API request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error ({}): {}", status, body));
-        }
-
+        self.request(Method::PUT, path, Some(body)).await?;
         Ok(())
+    }
+
+    pub async fn patch_json(&self, path: &str, body: &serde_json::Value) -> Result<(), String> {
+        self.request(Method::PATCH, path, Some(body)).await?;
+        Ok(())
+    }
+
+    pub async fn test_delay(&self, proxy: &str, url: &str) -> Result<u64, String> {
+        let path = format!(
+            "/proxies/{}/delay?timeout=5000&url={}",
+            path_segment(proxy),
+            path_segment(url)
+        );
+        let data: serde_json::Value = self.get_json(&path).await?;
+        data["delay"]
+            .as_u64()
+            .ok_or_else(|| "内核未返回有效延迟".into())
+    }
+
+    pub async fn delete(&self, path: &str) -> Result<(), String> {
+        self.request(Method::DELETE, path, None).await?;
+        Ok(())
+    }
+}
+
+pub fn path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn encodes_reserved_and_unicode_names() {
+        assert_eq!(path_segment("日本/%?#"), "%E6%97%A5%E6%9C%AC%2F%25%3F%23");
+    }
+    #[test]
+    fn controller_requires_loopback_and_preserves_secret() {
+        let yaml = serde_yaml::from_str("external-controller: 127.0.0.1:19191\nsecret: test-token")
+            .unwrap();
+        let config = ControllerConfig::from_yaml(&yaml).unwrap();
+        assert_eq!(config.ws_url, "ws://127.0.0.1:19191");
+        assert_eq!(config.secret, "test-token");
+        assert!(ControllerConfig::from_yaml(
+            &serde_yaml::from_str("external-controller: 0.0.0.0:9090").unwrap()
+        )
+        .is_err());
     }
 }

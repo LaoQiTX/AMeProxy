@@ -1,151 +1,47 @@
-// mihomo API 基础 URL
-const API_BASE = 'http://127.0.0.1:9090';
-const API_SECRET = 'secret'; // 实际使用时应该从配置中读取
+import { invoke, isTauri } from '@tauri-apps/api/core';
+export const isDesktop = () => isTauri();
 
-// 动态获取invoke函数
-const getInvoke = async () => {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    // 确保invoke是一个函数
-    if (typeof invoke === 'function') {
-      return invoke;
-    } else {
-      console.warn('Invoke is not a function, using mock');
-      return async (command: string, args?: any) => {
-        console.log(`模拟调用Tauri命令: ${command}`, args);
-        return Promise.resolve({});
-      };
-    }
-  } catch (e) {
-    console.warn('Tauri API not available, using mock');
-    return async (command: string, args?: any) => {
-      console.log(`模拟调用Tauri命令: ${command}`, args);
-      return Promise.resolve({});
-    };
-  }
-};
+export function desktopInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) return Promise.reject(new Error('请使用桌面应用（npm run tauri:dev），浏览器预览无法控制内核'));
+  return invoke<T>(command, args);
+}
 
-// 代理项类型
 export interface ProxyItem {
-  name: string
-  type: string
-  now?: boolean
-  latency?: number
-  history?: Array<{ delay: number, time: string }>
+  name: string;
+  type: string;
+  now?: string;
+  history?: Array<{ delay: number; time: string }>;
 }
-
-// 代理组类型
-export interface ProxyGroup {
-  name: string
-  type: string
-  all: string[]
-  now: string
+export interface ProxyGroup { name: string; type: string; all: string[]; now: string }
+export interface Provider {
+  vehicleType?: string;
+  proxies?: ProxyItem[];
+  updatedAt?: string;
 }
+export interface ControllerConfig { wsUrl: string; secret: string }
 
-// API 请求工具
-async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
-  const headers = {
-    'Authorization': `Bearer ${API_SECRET}`,
-    'Content-Type': 'application/json',
-    ...options.headers
-  };
+export const getProxies = () => desktopInvoke<{ proxies: Record<string, ProxyItem & { all?: string[] }> }>('get_proxies');
+export const changeProxy = (group: string, proxy: string) => desktopInvoke<void>('change_proxy', { group, proxy });
+export const setRules = (rules: string[]) => desktopInvoke<void>('set_rules', { rules });
+export const testProxy = (proxy: string) => desktopInvoke<number>('test_proxy', { proxy });
+export const startCore = () => desktopInvoke<void>('start_core');
+export const stopCore = () => desktopInvoke<void>('stop_core');
+export interface ProxyStatus { kernelRunning: boolean; systemProxyEnabled: boolean; recoveryPending: boolean; error: string }
+export const startProxy = () => desktopInvoke<void>('start_proxy');
+export const stopProxy = () => desktopInvoke<void>('stop_proxy');
+export const getProxyStatus = () => desktopInvoke<ProxyStatus>('get_proxy_status');
+export const is_proxy_running = () => desktopInvoke<boolean>('is_proxy_running');
+export const getProviders = () => desktopInvoke<{ providers: Record<string, Provider> }>('get_providers');
+export const getProviderProxies = (providerName: string) => desktopInvoke<Provider>('get_provider_proxies', { providerName });
+export const triggerProviderHealthCheck = (providerName: string) => desktopInvoke<void>('trigger_provider_health_check', { providerName });
+export const getTunStatus = () => desktopInvoke<boolean>('get_tun_status');
+export const toggleTun = (enabled: boolean) => desktopInvoke<void>('toggle_tun', { enabled });
+export const getUptime = () => desktopInvoke<number>('get_uptime');
+export const closeAllConnections = () => desktopInvoke<void>('close_all_connections');
+export const getControllerConfig = () => desktopInvoke<ControllerConfig>('get_controller_config');
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      headers
-    });
-
-    if (!response.ok) {
-      throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
-    }
-
-    // 204 No Content 不需要解析 JSON
-    if (response.status === 204) {
-      return {} as T;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error(`API 请求错误 ${endpoint}:`, error);
-    //  fallback 到 Tauri 命令
-    const invoke = await getInvoke();
-    return await invoke<T>(endpoint.replace(/\//g, '_').substring(1), options.body ? JSON.parse(options.body as string) : {}) as T;
-  }
-}
-
-// 获取代理列表
-export async function getProxies() {
-  return await apiRequest<{ proxies: Record<string, any> }>('/proxies');
-}
-
-// 选择代理
-export async function changeProxy(group: string, proxy: string) {
-  return await apiRequest('/proxies/' + encodeURIComponent(group), {
-    method: 'PUT',
-    body: JSON.stringify({ name: proxy })
-  });
-}
-
-// 测试代理延迟
-export async function testProxy(proxy: string) {
-  const response = await apiRequest<{ delay: number }>(`/proxies/${encodeURIComponent(proxy)}/delay`);
-  return response.delay;
-}
-
-// 启动代理内核
-export async function startCore() {
-  const invoke = await getInvoke();
-  return await invoke('start_core');
-}
-
-// 停止代理内核
-export async function stopCore() {
-  const invoke = await getInvoke();
-  return await invoke('stop_core');
-}
-
-// 检查代理是否正在运行
-export async function is_proxy_running() {
-  const invoke = await getInvoke();
-  return await invoke<boolean>('is_proxy_running');
-}
-
-// 获取代理提供者列表
-export async function getProviders() {
-  return await apiRequest<{ providers: Record<string, any> }>('/providers/proxies');
-}
-
-// 获取特定提供者的代理
-export async function getProviderProxies(providerName: string) {
-  return await apiRequest<any>(`/providers/proxies/${encodeURIComponent(providerName)}`);
-}
-
-// 触发提供者健康检查
-export async function triggerProviderHealthCheck(providerName: string) {
-  return await apiRequest(`/providers/proxies/${encodeURIComponent(providerName)}/healthcheck`);
-}
-
-// 获取 TUN 模式状态
-export async function getTunStatus() {
-  const invoke = await getInvoke();
-  return await invoke<boolean>('get_tun_status')
-}
-
-// 切换 TUN 模式
-export async function toggleTun(enabled: boolean) {
-  const invoke = await getInvoke();
-  return await invoke('toggle_tun', { enabled })
-}
-
-// 获取运行时长
-export async function getUptime() {
-  const invoke = await getInvoke();
-  return await invoke<number>('get_uptime')
-}
-
-// 关闭所有连接
-export async function closeAllConnections() {
-  return await apiRequest('/connections', { method: 'DELETE' });
+export function webSocketUrl(config: ControllerConfig, endpoint: string): string {
+  const url = new URL(endpoint, config.wsUrl);
+  if (config.secret) url.searchParams.set('token', config.secret);
+  return url.toString();
 }
