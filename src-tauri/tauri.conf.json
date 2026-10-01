@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AMeProxy",
+  "mainBinaryName": "AMeProxy",
   "version": "1.0.0-beta.1",
   "identifier": "com.ameproxy.app",
   "build": {

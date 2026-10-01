@@ -20,10 +20,6 @@ jobs:
         include:
           - os: windows-latest
             name: windows
-          - os: ubuntu-22.04
-            name: linux
-          - os: macos-latest
-            name: macos
 
     runs-on: ${{ matrix.os }}
 
