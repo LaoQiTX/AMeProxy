@@ -155,6 +155,20 @@ async function downloadMihomo() {
     fs.mkdirSync(SIDECAR_DIR, { recursive: true })
   }
 
+  // 发布构建会先执行 prebuild，随后 Tauri 的 beforeBuildCommand 可能再次执行
+  // prebuild。已有可用内核时直接复用，避免重复联网下载；需要更新时使用 --force。
+  const targetTriple = process.platform === 'win32' ? 'x86_64-pc-windows-msvc' :
+                     process.platform === 'darwin' ? 'aarch64-apple-darwin' : 'x86_64-unknown-linux-gnu'
+  const expectedFileName = `my-mihomo-${targetTriple}${process.platform === 'win32' ? '.exe' : ''}`
+  const expectedFilePath = path.join(SIDECAR_DIR, expectedFileName)
+  if (!process.argv.includes('--force') && fs.existsSync(expectedFilePath)) {
+    const size = fs.statSync(expectedFilePath).size
+    if (size > 1024 * 1024) {
+      console.log(`已存在 mihomo 内核，跳过下载: ${expectedFileName} (${size} bytes)`)
+      return
+    }
+  }
+
   let version = null
   let workingMirror = null
 
@@ -224,8 +238,6 @@ async function downloadMihomo() {
   }
 
   // 重命名 - Tauri 2.0+ 需要特定的命名格式: {name}-{target-triple}.{extension}
-  const targetTriple = process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 
-                     process.platform === 'darwin' ? 'aarch64-apple-darwin' : 'x86_64-unknown-linux-gnu'
   const exePath = path.join(SIDECAR_DIR, `my-mihomo-${targetTriple}${process.platform === 'win32' ? '.exe' : ''}`)
   
   // 查找 mihomo 可执行文件
@@ -284,10 +296,10 @@ async function downloadMihomo() {
     fs.unlinkSync(zipPath)
     // 清理其他临时文件和目录
     const entries = fs.readdirSync(SIDECAR_DIR)
-    const expectedFileName = `my-mihomo-${targetTriple}${process.platform === 'win32' ? '.exe' : ''}`
+    const cleanupExpectedFileName = `my-mihomo-${targetTriple}${process.platform === 'win32' ? '.exe' : ''}`
     entries.forEach(entry => {
       const entryPath = path.join(SIDECAR_DIR, entry)
-      if (entry !== expectedFileName) {
+      if (entry !== cleanupExpectedFileName) {
         try {
           const stat = fs.statSync(entryPath)
           if (stat.isDirectory()) {

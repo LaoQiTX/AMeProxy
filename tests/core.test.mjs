@@ -28,17 +28,21 @@ test('desktop services use registered command names and preserve arguments', asy
   await service.changeProxy('默认', '日本/%?#');
   assert.equal(await service.testProxy('日本/%?#'), 42);
   await service.closeAllConnections();
+  await service.getProxyMode();
+  await service.setProxyMode('global');
+  await service.checkNetwork();
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ['get_proxies', null], ['get_providers', null],
     ['change_proxy', { group: '默认', proxy: '日本/%?#' }],
     ['test_proxy', { proxy: '日本/%?#' }], ['close_all_connections', null],
+    ['get_proxy_mode', null], ['set_proxy_mode', { mode: 'global' }], ['check_network', null],
   ]);
   const url = new URL(service.webSocketUrl({ wsUrl: 'ws://127.0.0.1:1234', secret: 'a&b?#' }, '/logs?level=info'));
   assert.equal(url.searchParams.get('level'), 'info');
   assert.equal(url.searchParams.get('token'), 'a&b?#');
   desktop = false;
   await assert.rejects(service.startCore(), /桌面应用/);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 8);
 });
 
 test('stopping telemetry cancels retries and ignores stale frames', () => {
@@ -64,6 +68,20 @@ test('stopping telemetry cancels retries and ignores stale frames', () => {
   instances[0].onclose();
   assert.deepEqual(received, [1]);
   assert.equal(timers.size, 0);
+});
+
+test('telemetry reports socket closure before retry and ignores stopped sockets', () => {
+  const instances = [], states = [];
+  class Socket {
+    constructor() { instances.push(this); }
+    close() { this.onclose?.(); }
+  }
+  const { TelemetrySocket } = load('src/services/telemetry.ts', {}, { WebSocket: Socket });
+  const telemetry = new TelemetrySocket('ws://example.invalid', () => {}, state => states.push(state));
+  instances[0].onopen();
+  instances[0].onclose();
+  telemetry.stop();
+  assert.deepEqual(states, [true, false, false]);
 });
 
 test('latency jobs respect the concurrency bound', async () => {
@@ -125,6 +143,8 @@ function connectionStore(service) {
       isDesktop: () => true,
       desktopInvoke: async command => command === 'get_rule_config' ? [] : { 'proxy-providers': {} },
       getProviders: async () => ({ providers: {} }),
+      getTunStatus: async () => false,
+      getProxyMode: async () => 'rule',
       ...service,
     },
     '../services/telemetry': {},
@@ -150,6 +170,27 @@ test('main switch enables system proxy even when kernel is already running, then
   assert.equal(store.systemProxyEnabled, false);
   assert.equal(store.recoveryPending, false);
   assert.deepEqual(calls, ['enable', 'restore']);
+});
+
+test('mode switch reads confirmed mode and keeps previous mode after failure', async () => {
+  let selected = 'rule';
+  const store = connectionStore({
+    setProxyMode: async mode => {
+      if (mode === 'direct') throw new Error('配置重载失败');
+      selected = mode;
+      return selected;
+    },
+    getProxyMode: async () => selected,
+    getProxies: async () => ({ proxies: {} }),
+  });
+  store.isConnected = true;
+  store.proxyMode = 'rule';
+  await store.changeProxyMode('global');
+  assert.equal(store.proxyMode, 'global');
+  await store.changeProxyMode('direct');
+  assert.equal(store.proxyMode, 'global');
+  assert.equal(store.modeBusy, false);
+  assert.match(store.error, /配置重载失败/);
 });
 
 test('failed restore keeps actual proxy state visible and allows retry', async () => {

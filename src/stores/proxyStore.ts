@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia';
 import type { Connection, Rule, Log, ProxyGroup, Subscription, Proxy, TrafficData } from '../types';
+import type { ProxyMode, DiagnosticCheck } from '../services/proxy';
 import {
   desktopInvoke, getProxies, changeProxy, testProxy, getProviders, closeAllConnections,
   is_proxy_running, startCore, startProxy, stopProxy, getProxyStatus, isDesktop, getControllerConfig, webSocketUrl, getTunStatus,
+  getProxyMode, setProxyMode, checkNetwork,
 } from '../services/proxy';
 import { TelemetrySocket, runLimited } from '../services/telemetry';
 
@@ -27,6 +29,16 @@ export const useProxyStore = defineStore('proxy', {
     selectedKernel: 'Mihomo',
     kernels: ['Mihomo'],
     isTesting: false,
+    nodeTesting: '',
+    proxyMode: null as ProxyMode | null,
+    modeBusy: false,
+    diagnosticBusy: false,
+    diagnosticChecks: [] as DiagnosticCheck[],
+    trafficConnected: false,
+    trafficReceivedAt: 0,
+    connectionsConnected: false,
+    connectionsReceivedAt: 0,
+    telemetryCheckedAt: 0,
     tunMode: false,
     mixedPort: 7890,
     allowLan: false,
@@ -41,6 +53,12 @@ export const useProxyStore = defineStore('proxy', {
     trafficTotal: { up: 0, down: 0 },
     uptime: 0,
   }),
+  getters: {
+    trafficAvailable: state => state.isConnected && state.trafficConnected && state.trafficReceivedAt > 0
+      && state.telemetryCheckedAt - state.trafficReceivedAt < 10000,
+    connectionsAvailable: state => state.isConnected && state.connectionsConnected && state.connectionsReceivedAt > 0
+      && state.telemetryCheckedAt - state.connectionsReceivedAt < 10000,
+  },
   actions: {
     async initialize() {
       if (this.initialized) return;
@@ -69,16 +87,27 @@ export const useProxyStore = defineStore('proxy', {
       const config = await getControllerConfig();
       this.isConnected = true;
       this.trafficTotal = { up: 0, down: 0 };
+      this.trafficConnected = false;
+      this.trafficReceivedAt = 0;
+      this.connectionsConnected = false;
+      this.connectionsReceivedAt = 0;
+      this.telemetryCheckedAt = Date.now();
       let previous = new Map<string, { bytes: number; time: number }>();
       sockets = [
         new TelemetrySocket(webSocketUrl(config, '/traffic'), data => {
           this.trafficData = { up: this.formatBytes(data.up) + '/s', down: this.formatBytes(data.down) + '/s' };
+          this.trafficReceivedAt = Date.now();
+          this.telemetryCheckedAt = Date.now();
+        }, connected => {
+          this.trafficConnected = connected;
+          this.telemetryCheckedAt = Date.now();
         }),
         new TelemetrySocket(webSocketUrl(config, '/logs?level=info'), data => {
           this.logs.unshift({ time: new Date().toLocaleTimeString(), level: String(data.type).toUpperCase(), msg: String(data.payload) });
           if (this.logs.length > 200) this.logs.length = 200;
         }),
         new TelemetrySocket(webSocketUrl(config, '/connections'), data => {
+          this.connectionsReceivedAt = Date.now();
           this.trafficTotal = { up: data.uploadTotal || 0, down: data.downloadTotal || 0 };
           const now = Date.now();
           const next = new Map<string, { bytes: number; time: number }>();
@@ -96,10 +125,14 @@ export const useProxyStore = defineStore('proxy', {
             };
           });
           previous = next;
+        }, connected => {
+          this.connectionsConnected = connected;
+          this.telemetryCheckedAt = Date.now();
         }),
       ];
       await this.fetchProxies().catch(error => { this.error = message(error); });
       this.tunMode = await getTunStatus().catch(() => false);
+      await this.fetchProxyMode().catch(error => { this.error = message(error); });
       this.startPolling();
     },
 
@@ -142,6 +175,12 @@ export const useProxyStore = defineStore('proxy', {
       this.tunMode = false;
       this.trafficData = { up: '0 B/s', down: '0 B/s' };
       this.trafficTotal = { up: 0, down: 0 };
+      this.trafficConnected = false;
+      this.trafficReceivedAt = 0;
+      this.connectionsConnected = false;
+      this.connectionsReceivedAt = 0;
+      this.proxyMode = null;
+      this.diagnosticChecks = [];
       this.connections = [];
       this.proxyGroups = [];
       this.proxies = [];
@@ -153,6 +192,7 @@ export const useProxyStore = defineStore('proxy', {
       const current = generation;
       const poll = async () => {
         if (current !== generation || !this.isConnected) return;
+        this.telemetryCheckedAt = Date.now();
         try {
           const status = await this.refreshProxyStatus();
           if (current !== generation) return;
@@ -161,7 +201,8 @@ export const useProxyStore = defineStore('proxy', {
             this.error = status.error || '内核已退出，请检查日志后重新开启代理';
             return;
           }
-          await Promise.all([this.fetchProxies(), this.fetchUptime()]);
+          await Promise.all([this.fetchProxies(), this.fetchUptime(), this.fetchProxyMode(),
+            getTunStatus().then(value => { if (current === generation) this.tunMode = value; })]);
         } catch (error) {
           if (current === generation) this.error = message(error);
         } finally {
@@ -232,9 +273,14 @@ export const useProxyStore = defineStore('proxy', {
     async switchProxy(groupName: string, proxyName: string) {
       if (this.subscriptionBusy) throw new Error('正在切换订阅，请稍后选择节点');
       try {
+        const current = generation;
+        const revision = subscriptionGeneration;
         await changeProxy(groupName, proxyName);
-        const group = this.proxyGroups.find(group => group.name === groupName);
-        if (group) group.selected = proxyName;
+        if (current !== generation || revision !== subscriptionGeneration) return;
+        await this.fetchProxies();
+        if (this.proxyGroups.find(group => group.name === groupName)?.selected !== proxyName) {
+          throw new Error('内核未确认节点切换，请刷新策略组后重试');
+        }
       } catch (error) {
         this.error = message(error);
         throw error;
@@ -257,6 +303,51 @@ export const useProxyStore = defineStore('proxy', {
       } finally { this.isTesting = false; }
     },
 
+    async testNode(name: string) {
+      if (this.nodeTesting || !this.isConnected || this.subscriptionBusy) return;
+      this.nodeTesting = name;
+      const current = generation;
+      const revision = subscriptionGeneration;
+      try {
+        const delay = await testProxy(name);
+        if (current === generation && revision === subscriptionGeneration) {
+          const node = this.proxies.find(proxy => proxy.name === name);
+          if (node) node.delay = delay;
+        }
+      } catch (error) { this.error = message(error); }
+      finally { this.nodeTesting = ''; }
+    },
+
+    async fetchProxyMode() {
+      if (!this.isConnected) { this.proxyMode = null; return; }
+      if (this.modeBusy || this.subscriptionBusy) return;
+      const current = generation;
+      const mode = await getProxyMode();
+      if (current === generation && !this.modeBusy && !this.subscriptionBusy) this.proxyMode = mode;
+    },
+
+    async changeProxyMode(mode: ProxyMode) {
+      if (this.modeBusy || this.subscriptionBusy || !this.isConnected || mode === this.proxyMode) return;
+      this.modeBusy = true;
+      const previous = this.proxyMode;
+      try {
+        this.proxyMode = await setProxyMode(mode);
+        await this.fetchProxies();
+      } catch (error) {
+        this.proxyMode = previous;
+        this.error = message(error);
+      } finally { this.modeBusy = false; }
+    },
+
+    async runDiagnostics() {
+      if (this.diagnosticBusy || this.previewMode) return;
+      this.diagnosticBusy = true;
+      this.diagnosticChecks = [];
+      try { this.diagnosticChecks = await checkNetwork(); }
+      catch (error) { this.error = message(error); }
+      finally { this.diagnosticBusy = false; }
+    },
+
     async saveSubscription(command: string, args: Record<string, unknown>, name?: string, start = false) {
       if (this.subscriptionBusy || this.isBusy) throw new Error('请等待当前操作完成');
       this.subscriptionBusy = true;
@@ -272,6 +363,8 @@ export const useProxyStore = defineStore('proxy', {
         await this.fetchProviders();
         if (this.isConnected) {
           await this.fetchProxies();
+          await this.fetchProxyMode();
+          this.tunMode = await getTunStatus().catch(() => false);
           if (name && name === this.activeSubscription) {
             const deadline = Date.now() + 6000;
             while (!this.subscriptions.some(s => s.name === name && s.status === 'ready') && Date.now() < deadline) {

@@ -30,6 +30,15 @@ export interface ProxyStatus { kernelRunning: boolean; systemProxyEnabled: boole
 export const startProxy = () => desktopInvoke<void>('start_proxy');
 export const stopProxy = () => desktopInvoke<void>('stop_proxy');
 export const getProxyStatus = () => desktopInvoke<ProxyStatus>('get_proxy_status');
+export type ProxyMode = 'rule' | 'global' | 'direct';
+export const getProxyMode = () => desktopInvoke<ProxyMode>('get_proxy_mode');
+export const setProxyMode = (mode: ProxyMode) => desktopInvoke<ProxyMode>('set_proxy_mode', { mode });
+export interface DiagnosticCheck {
+  key: 'kernel' | 'config' | 'systemProxy' | 'port' | 'dns' | 'target';
+  state: 'success' | 'failed' | 'untested' | 'notApplicable';
+  detail: string;
+}
+export const checkNetwork = () => desktopInvoke<DiagnosticCheck[]>('check_network');
 export const is_proxy_running = () => desktopInvoke<boolean>('is_proxy_running');
 export const getProviders = () => desktopInvoke<{ providers: Record<string, Provider> }>('get_providers');
 export const getProviderProxies = (providerName: string) => desktopInvoke<Provider>('get_provider_proxies', { providerName });
