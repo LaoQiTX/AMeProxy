@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { ShieldCheck, ShieldOff } from 'lucide-vue-next';
 import { useProxyStore } from '../../stores/proxyStore';
 import ProxyToggle from './ProxyToggle.vue';
 const store = useProxyStore();
@@ -20,11 +19,7 @@ const page = computed(() => pages[store.currentTab] || pages.dashboard);
   <header class="page-header">
     <div class="page-heading"><h1>{{ page.title }}</h1><p>{{ page.description }}</p></div>
     <div class="header-actions">
-      <span v-if="store.currentTab === 'dashboard'" class="status-label" :class="{ enabled: store.systemProxyEnabled }">
-        <ShieldCheck v-if="store.systemProxyEnabled" :size="15" /><ShieldOff v-else :size="15" />
-        {{ store.systemProxyEnabled ? '系统代理已开启' : '系统代理未开启' }}
-      </span>
-      <ProxyToggle v-else />
+      <ProxyToggle v-if="store.currentTab !== 'dashboard'" />
     </div>
   </header>
 </template>

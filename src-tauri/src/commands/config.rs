@@ -422,6 +422,30 @@ mod tests {
             .unwrap();
         assert_eq!(unauthenticated.status(), 401);
 
+        // The home mode selector must update the live core and survive restart.
+        for mode in ["global", "direct"] {
+            config_file::update(&state, |v| {
+                v["mode"] = key(mode);
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let runtime: serde_json::Value = api.get_json("/configs").await.unwrap();
+            assert_eq!(runtime["mode"], mode);
+        }
+        state.stop_core().await.unwrap();
+        state.start_core().await.unwrap();
+        let runtime: serde_json::Value = api.get_json("/configs").await.unwrap();
+        assert_eq!(runtime["mode"], "direct");
+        config_file::update(&state, |v| {
+            v["mode"] = key("rule");
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let runtime: serde_json::Value = api.get_json("/configs").await.unwrap();
+        assert_eq!(runtime["mode"], "rule");
+
         // Reference updates must pass the real parser and become visible at runtime.
         config_file::update(&state, |v| {
             update_provider(v, "old", "renamed", "https://example.invalid/subscription")

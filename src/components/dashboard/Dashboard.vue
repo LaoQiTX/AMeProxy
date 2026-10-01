@@ -1,22 +1,48 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { ArrowDown, ArrowUp, ArrowRight, Activity, Clock3, Globe2, Layers, RefreshCw, Network, Monitor, Server, Check } from 'lucide-vue-next';
+import { Activity, ArrowDown, ArrowRight, ArrowUp, CheckCircle2, CircleHelp, Clock3, Cpu, Gauge, Globe2, Layers, LoaderCircle, RefreshCw, SearchCheck, Settings2, Shield, TriangleAlert, WifiOff } from 'lucide-vue-next';
 import { useProxyStore } from '../../stores/proxyStore';
+import type { ProxyMode, DiagnosticCheck } from '../../services/proxy';
 import ProxyToggle from '../common/ProxyToggle.vue';
+
 const store = useProxyStore();
 const switching = ref(false);
-const defaultGroup = computed(() => store.proxyGroups.find(g => g.name === '默认') || store.proxyGroups.find(g => g.type === 'Selector' && g.name !== 'GLOBAL') || store.proxyGroups.find(g => g.name === 'GLOBAL') || store.proxyGroups[0]);
-const selected = computed(() => defaultGroup.value?.selected || '');
-const currentProxy = computed(() => store.proxies.find(p => p.name === selected.value));
-const direct = computed(() => ['DIRECT', '直连'].includes(selected.value));
+const diagnosticsOpen = ref(false);
+const modes: { value: ProxyMode; label: string }[] = [
+  { value: 'rule', label: '规则' }, { value: 'global', label: '全局' }, { value: 'direct', label: '直连' },
+];
+const checkLabels: Record<DiagnosticCheck['key'], string> = {
+  kernel: '代理核心', config: '配置文件', systemProxy: '系统代理',
+  port: '本地端口', dns: 'DNS 查询', target: '目标连通性',
+};
+const checkKeys = Object.keys(checkLabels) as DiagnosticCheck['key'][];
+const activeSubscription = computed(() => store.subscriptions.find(sub => sub.name === store.activeSubscription));
+const currentGroup = computed(() => store.proxyGroups.find(group => group.name === (store.proxyMode === 'global' ? 'GLOBAL' : '默认'))
+  || store.proxyGroups.find(group => group.type === 'Selector' && group.name !== 'GLOBAL')
+  || store.proxyGroups.find(group => group.name === 'GLOBAL') || store.proxyGroups[0]);
+const selected = computed(() => currentGroup.value?.selected || '');
+const currentNode = computed(() => store.proxies.find(node => node.name === selected.value));
+const nodeIsDirect = computed(() => ['DIRECT', '直连'].includes(selected.value));
+const nodeIsGroup = computed(() => store.proxyGroups.some(group => group.name === selected.value));
+const coreStatus = computed(() => store.isBusy ? '处理中' : store.isConnected ? '运行中' : '未运行');
+const proxyStatus = computed(() => store.systemProxyEnabled ? '已接管' : store.recoveryPending ? '待恢复' : '未接管');
+const connectionSummary = computed(() => store.isBusy ? '正在更新连接状态' : store.systemProxyEnabled
+  ? '系统代理已开启' : store.tunMode ? 'TUN 已开启' : store.isConnected ? '核心已就绪' : '代理未开启');
 const uptime = computed(() => {
-  if (!store.isConnected) return '—';
-  const s = store.uptime;
-  return [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(n => String(n).padStart(2, '0')).join(':');
+  if (!store.isConnected) return '--:--:--';
+  const seconds = store.uptime;
+  return [Math.floor(seconds / 3600), Math.floor(seconds % 3600 / 60), seconds % 60]
+    .map(value => String(value).padStart(2, '0')).join(':');
 });
-const delay = computed(() => !currentProxy.value?.delay ? '尚未测速' : currentProxy.value.delay < 0 ? '连接超时' : currentProxy.value.delay + ' ms');
+const nodeDelay = computed(() => currentNode.value?.delay && currentNode.value.delay > 0 ? `${currentNode.value.delay} ms`
+  : currentNode.value?.delay && currentNode.value.delay < 0 ? '测速失败' : '尚未测速');
+const diagnosticRows = computed(() => checkKeys.map(key => ({
+  key, label: checkLabels[key],
+  ...(store.diagnosticChecks.find(item => item.key === key) || { state: 'untested', detail: '尚未检测' }),
+})));
+
 async function selectNode(event: Event) {
-  const group = defaultGroup.value;
+  const group = currentGroup.value;
   if (!group || switching.value) return;
   const target = event.target as HTMLSelectElement;
   switching.value = true;
@@ -29,70 +55,100 @@ async function selectSubscription(event: Event) {
   try { await store.switchSubscription(target.value); }
   catch { target.value = store.activeSubscription; }
 }
+function openDiagnostics() {
+  diagnosticsOpen.value = true;
+  void store.runDiagnostics();
+}
 </script>
 
 <template>
   <div class="dashboard">
-    <section class="connection-panel" :class="{ 'is-active': store.systemProxyEnabled }" aria-labelledby="connection-title">
-      <div class="connection-main">
-        <div class="connection-copy">
-          <span class="eyebrow"><i class="status-dot" :class="{ online: store.systemProxyEnabled }"></i> SYSTEM PROXY</span>
-          <h2 id="connection-title">{{ store.systemProxyEnabled ? '代理已开启' : store.tunMode ? 'TUN 已开启' : '准备好，连接世界' }}</h2>
-          <p>{{ store.systemProxyEnabled ? '系统代理已指向本地内核，遵循系统设置的应用将按规则转发。' : store.tunMode ? '虚拟网卡正在运行，关闭代理将同时停止内核与 TUN。' : '一键启动内核并设置系统代理，无需手动配置浏览器。' }}</p>
-          <div class="connection-actions"><ProxyToggle /><span>{{ store.systemProxyEnabled ? '关闭时恢复原系统设置' : 'Windows 系统代理' }}</span></div>
+    <section class="home-status" aria-labelledby="connection-title">
+      <div class="home-status-main">
+        <div class="home-status-copy">
+          <div class="home-kicker"><span class="status-dot" :class="{ online: store.systemProxyEnabled || store.tunMode }"></span>连接状态</div>
+          <h2 id="connection-title">{{ connectionSummary }}</h2>
+          <p v-if="store.recoveryPending">原系统代理设置尚未恢复，请重试或检查网络设置。</p>
+          <p v-else-if="store.systemProxyEnabled">遵循 Windows 系统代理的应用将使用本地代理端口。</p>
+          <p v-else-if="store.tunMode">TUN 正在运行；关闭代理将同时停止内核与 TUN。</p>
+          <p v-else-if="store.isConnected">Mihomo 已运行，Windows 系统代理尚未由本应用接管。</p>
+          <p v-else>启动内核并开启 Windows 系统代理。</p>
         </div>
-        <div class="connection-visual" aria-hidden="true">
-          <div class="orbit orbit-outer"></div><div class="orbit orbit-inner"></div>
-          <div class="network-symbol"><Network :size="38" :stroke-width="1.5" /></div>
-          <span class="orbit-node node-a"></span><span class="orbit-node node-b"></span>
-        </div>
+        <div class="home-primary-action"><ProxyToggle /><span>关闭时停止内核并恢复系统代理</span></div>
       </div>
-      <div class="connection-path">
-        <span><Monitor :size="14" />本机应用</span><span class="path-line"></span>
-        <span :class="{ 'accent-text': store.systemProxyEnabled }"><Check v-if="store.systemProxyEnabled" :size="14" /><Server v-else :size="14" />系统代理</span><span class="path-line"></span>
-        <span><Globe2 :size="14" />{{ direct ? '直连出口' : '按规则分流' }}</span>
+      <div class="home-status-details">
+        <div><Cpu :size="16" /><span>核心</span><strong :class="{ 'state-ok': store.isConnected }">{{ coreStatus }}</strong></div>
+        <div><Shield :size="16" /><span>Windows 系统代理</span><strong :class="{ 'state-ok': store.systemProxyEnabled }">{{ proxyStatus }}</strong></div>
+        <div><Globe2 :size="16" /><span>TUN</span><strong :class="{ 'state-ok': store.tunMode }">{{ store.tunMode ? '运行中' : '未开启' }}</strong></div>
+        <div><Layers :size="16" /><span>代理模式</span><strong>{{ modes.find(mode => mode.value === store.proxyMode)?.label || '未知' }}</strong></div>
+      </div>
+      <div v-if="store.error" class="home-status-recovery">
+        <TriangleAlert :size="15" /><span>运行异常</span>
+        <button @click="openDiagnostics">检查网络 <ArrowRight :size="14" /></button>
+        <button @click="store.setCurrentTab('logs')">查看日志 <ArrowRight :size="14" /></button>
       </div>
     </section>
 
-    <div class="overview-grid">
-      <section class="panel node-panel">
-        <div class="section-heading"><h2><Layers :size="17" />当前策略</h2><button class="text-button" @click="store.setCurrentTab('groups')">管理策略<ArrowRight :size="14" /></button></div>
-        <div v-if="store.subscriptions.length" class="mb-4">
-          <label for="active-subscription" class="micro-label">当前订阅{{ store.subscriptionBusy ? ' · 处理中…' : '' }}</label>
-          <select id="active-subscription" class="node-select" :value="store.activeSubscription" @change="selectSubscription" :disabled="store.subscriptionBusy || store.isBusy">
+    <div class="home-overview">
+      <section class="panel home-config" aria-labelledby="config-title">
+        <div class="section-heading"><h2 id="config-title"><Layers :size="17" />当前订阅与策略</h2><button class="text-button" @click="store.setCurrentTab('proxies')">管理订阅<ArrowRight :size="14" /></button></div>
+        <div class="home-field">
+          <div class="home-field-heading"><label for="active-subscription">当前订阅</label><span v-if="store.subscriptionBusy"><LoaderCircle :size="12" class="animate-spin" />切换中</span><span v-else-if="activeSubscription?.status === 'ready'" class="state-ok">已加载</span><span v-else>{{ activeSubscription?.status === 'error' ? '加载失败' : activeSubscription ? '待加载' : '未添加' }}</span></div>
+          <select v-if="store.subscriptions.length" id="active-subscription" class="node-select" :value="store.activeSubscription" :title="store.activeSubscription" @change="selectSubscription" :disabled="store.subscriptionBusy || store.isBusy">
             <option v-for="sub in store.subscriptions" :key="sub.name" :value="sub.name">{{ sub.name }}</option>
           </select>
-          <p v-if="store.subscriptions.length > 1" class="micro-label mt-2">仅使用选中订阅；切换会断开旧连接。</p>
+          <button v-else class="home-empty-link" @click="store.setCurrentTab('proxies')">添加订阅 <ArrowRight :size="14" /></button>
+          <p v-if="activeSubscription && activeSubscription.updateTime !== '尚未更新'" class="home-field-note">上次更新 {{ activeSubscription.updateTime }}</p>
         </div>
-        <template v-if="defaultGroup">
-          <div class="node-summary"><span class="node-avatar"><Globe2 :size="23" /></span><div><p class="micro-label">{{ defaultGroup.name }}</p><h3>{{ selected || '尚未选择节点' }}</h3></div></div>
-          <label for="active-node" class="micro-label">切换出口节点</label>
-          <select id="active-node" class="node-select" :value="selected" @change="selectNode" :disabled="switching || store.subscriptionBusy || defaultGroup.type !== 'Selector' || !store.isConnected">
-            <option v-for="name in defaultGroup.options" :key="name" :value="name">{{ name }}</option>
-          </select>
-          <div class="node-meta"><span>{{ direct ? 'DIRECT · 直接连接' : (currentProxy?.type || defaultGroup.type) }}</span><button class="text-button" @click="store.testLatency()" :disabled="store.isTesting || !store.proxies.length"><RefreshCw :size="13" :class="{ 'animate-spin': store.isTesting }" />{{ store.isTesting ? '测速中' : delay }}</button></div>
-          <p v-if="direct" class="inline-hint">当前出口为直连。选择订阅节点后，匹配代理规则的流量才会经过远程节点。</p>
-        </template>
-        <div v-else class="empty-node">
-          <div class="empty-symbol"><Globe2 :size="26" :stroke-width="1.5" /></div>
-          <h3>{{ store.subscriptions.length ? '启动后加载节点' : '从一个订阅开始' }}</h3>
-          <p>导入 Clash YAML 订阅，再选择你的连接节点。</p>
-          <button class="secondary-button" @click="store.setCurrentTab('proxies')">{{ store.subscriptions.length ? '查看订阅' : '添加订阅' }}<ArrowRight :size="14" /></button>
+        <div class="home-field home-strategy">
+          <div class="home-field-heading"><label for="active-node">{{ currentGroup?.name || '代理组' }}</label><button class="text-button" @click="store.setCurrentTab('groups')">管理策略<ArrowRight :size="14" /></button></div>
+          <p v-if="store.proxyMode === 'direct'" class="home-direct-state">直连模式 · 不使用代理节点</p>
+          <template v-else-if="currentGroup">
+            <select id="active-node" class="node-select" :value="selected" :title="selected" @change="selectNode" :disabled="switching || store.subscriptionBusy || currentGroup.type !== 'Selector' || !store.isConnected">
+              <option v-for="name in currentGroup.options" :key="name" :value="name">{{ name }}</option>
+            </select>
+            <div class="home-node-meta">
+              <span>{{ nodeIsDirect ? '直接连接' : nodeIsGroup ? '由下级策略组选择' : currentGroup.type === 'Selector' ? '手动选择' : `${currentGroup.type} 自动策略` }}</span>
+              <button v-if="currentNode" class="text-button" @click="store.testNode(currentNode.name)" :disabled="!!store.nodeTesting || store.subscriptionBusy"><RefreshCw :size="13" :class="{ 'animate-spin': store.nodeTesting === currentNode.name }" />{{ store.nodeTesting === currentNode.name ? '测速中' : nodeDelay }}</button>
+            </div>
+          </template>
+          <p v-else class="home-field-note">{{ store.isConnected ? '暂无可用策略组' : '内核启动后显示策略组与节点' }}</p>
         </div>
       </section>
 
-      <section class="panel traffic-panel">
-        <div class="section-heading"><h2><Activity :size="17" />实时流量</h2><span class="micro-label">内核统计</span></div>
-        <div class="traffic-row"><span class="traffic-icon"><ArrowDown :size="19" /></span><div><span class="micro-label">下载速度</span><strong>{{ store.trafficData.down }}</strong></div><span class="traffic-total">累计 {{ store.formatBytes(store.trafficTotal.down) }}</span></div>
-        <div class="traffic-row"><span class="traffic-icon upload"><ArrowUp :size="19" /></span><div><span class="micro-label">上传速度</span><strong>{{ store.trafficData.up }}</strong></div><span class="traffic-total">累计 {{ store.formatBytes(store.trafficTotal.up) }}</span></div>
-        <div class="session-meta"><span><Clock3 :size="14" />内核运行时长</span><strong>{{ uptime }}</strong></div>
+      <section class="panel home-traffic" aria-labelledby="traffic-title">
+        <div class="section-heading"><h2 id="traffic-title"><Activity :size="17" />实时流量</h2><span class="micro-label">{{ store.trafficAvailable ? '实时更新' : '实时数据不可用' }}</span></div>
+        <div class="home-speed-grid">
+          <div><span><ArrowDown :size="16" />下载</span><strong>{{ store.trafficAvailable ? store.trafficData.down : '--' }}</strong></div>
+          <div><span><ArrowUp :size="16" />上传</span><strong>{{ store.trafficAvailable ? store.trafficData.up : '--' }}</strong></div>
+        </div>
+        <div class="home-traffic-total"><span>本次内核运行累计</span><strong>{{ store.connectionsAvailable ? `下载 ${store.formatBytes(store.trafficTotal.down)} · 上传 ${store.formatBytes(store.trafficTotal.up)}` : '统计不可用' }}</strong></div>
+        <div class="home-traffic-total"><span><Clock3 :size="14" />运行时长</span><strong>{{ uptime }}</strong></div>
       </section>
     </div>
 
-    <button class="activity-strip" @click="store.setCurrentTab('connections')">
-      <span class="activity-icon"><Activity :size="18" /></span>
-      <span><strong>{{ store.connections.length }} 个活跃连接</strong><small>查看应用请求、命中规则与流量去向</small></span>
-      <ArrowRight :size="18" />
-    </button>
+    <section class="home-mode" aria-labelledby="mode-title">
+      <div><h2 id="mode-title"><Gauge :size="17" />代理模式</h2><p>{{ store.proxyMode === 'global' ? '流量交由全局策略处理' : store.proxyMode === 'direct' ? '流量不通过代理节点转发' : store.proxyMode === 'rule' ? '流量按配置规则分流' : '启动内核后读取当前模式' }}</p></div>
+      <div class="mode-segments" role="group" aria-label="代理模式">
+        <button v-for="mode in modes" :key="mode.value" :class="{ active: store.proxyMode === mode.value }" :aria-pressed="store.proxyMode === mode.value" :disabled="!store.isConnected || store.modeBusy || store.subscriptionBusy" @click="store.changeProxyMode(mode.value)">{{ mode.label }}</button>
+      </div>
+    </section>
+
+    <div class="home-actions">
+      <button class="home-action" @click="store.setCurrentTab('connections')"><Activity :size="18" /><span><strong>{{ store.connectionsAvailable ? `${store.connections.length} 个活跃连接` : '连接数据不可用' }}</strong><small>查看连接</small></span><ArrowRight :size="16" /></button>
+      <button class="home-action" :aria-expanded="diagnosticsOpen" @click="openDiagnostics"><SearchCheck :size="18" /><span><strong>{{ store.diagnosticBusy ? '正在检查网络' : '检查网络' }}</strong><small>核心、端口、DNS 与目标连通性</small></span><LoaderCircle v-if="store.diagnosticBusy" :size="16" class="animate-spin" /><ArrowRight v-else :size="16" /></button>
+    </div>
+
+    <section v-if="diagnosticsOpen" class="home-diagnostics" aria-labelledby="diagnostics-title">
+      <div class="section-heading"><h2 id="diagnostics-title"><SearchCheck :size="17" />网络诊断</h2><button class="text-button" :disabled="store.diagnosticBusy" @click="store.runDiagnostics()"><RefreshCw :size="14" :class="{ 'animate-spin': store.diagnosticBusy }" />重新检测</button></div>
+      <p class="home-field-note">DNS 测试 example.com；经本地代理访问 www.gstatic.com/generate_204。结果仅代表这两个测试目标。</p>
+      <div class="diagnostic-grid">
+        <div v-for="check in diagnosticRows" :key="check.key" class="diagnostic-item" :class="`diagnostic-${check.state}`">
+          <CheckCircle2 v-if="check.state === 'success'" :size="16" /><TriangleAlert v-else-if="check.state === 'failed'" :size="16" /><CircleHelp v-else-if="check.state === 'untested'" :size="16" /><WifiOff v-else :size="16" />
+          <div><strong>{{ check.label }}</strong><span>{{ check.detail }}</span></div>
+        </div>
+      </div>
+      <div v-if="diagnosticRows.some(check => check.state === 'failed')" class="diagnostic-links"><button class="text-button" @click="store.setCurrentTab('logs')">查看日志<ArrowRight :size="14" /></button><button class="text-button" @click="store.setCurrentTab('settings')"><Settings2 :size="14" />网络设置</button></div>
+    </section>
   </div>
 </template>

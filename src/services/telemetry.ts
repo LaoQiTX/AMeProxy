@@ -5,7 +5,8 @@ export class TelemetrySocket {
   private stopped = false;
   private retry = 1000;
 
-  constructor(private url: string, private receive: (data: any) => void) {
+  constructor(private url: string, private receive: (data: any) => void,
+    private onStatus?: (connected: boolean) => void) {
     this.connect();
   }
 
@@ -14,7 +15,9 @@ export class TelemetrySocket {
     try {
       const socket = new WebSocket(this.url);
       this.socket = socket;
-      socket.onopen = () => { if (this.socket === socket) this.retry = 1000; };
+      socket.onopen = () => {
+        if (this.socket === socket) { this.retry = 1000; this.onStatus?.(true); }
+      };
       socket.onmessage = event => {
         if (this.stopped || this.socket !== socket) return;
         try { this.receive(JSON.parse(event.data)); } catch { /* Ignore malformed frames. */ }
@@ -23,6 +26,7 @@ export class TelemetrySocket {
       socket.onclose = () => {
         if (this.socket !== socket || this.stopped) return;
         this.socket = null;
+        this.onStatus?.(false);
         this.schedule();
       };
     } catch { this.schedule(); }
@@ -40,6 +44,7 @@ export class TelemetrySocket {
     this.timer = null;
     const socket = this.socket;
     this.socket = null;
+    this.onStatus?.(false);
     socket?.close();
   }
 }

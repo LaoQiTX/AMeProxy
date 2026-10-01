@@ -32,7 +32,7 @@ const tabs = [
         :aria-current="store.currentTab === 'settings' ? 'page' : undefined" title="偏好设置">
         <Settings2 :size="18" /><span>偏好设置</span>
       </button>
-      <div class="kernel-card" :title="store.isConnected ? 'Mihomo 内核运行中' : 'Mihomo 内核未运行'">
+      <div v-if="store.currentTab !== 'dashboard'" class="kernel-card" :title="store.isConnected ? 'Mihomo 内核运行中' : 'Mihomo 内核未运行'">
         <div class="kernel-title"><Cpu :size="16" /><span>Mihomo</span><i class="status-dot" :class="{ online: store.isConnected }"></i></div>
         <p>{{ store.isConnected ? '内核运行中' : '内核未运行' }}<span>本地服务</span></p>
       </div>
